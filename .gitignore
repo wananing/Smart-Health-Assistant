@@ -1,0 +1,26 @@
+# node modules
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+.env
+
+# os
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# tools
+.cursorrules
+.agent/
