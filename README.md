@@ -4,7 +4,7 @@
 
 基于 **LangGraph + FastAPI + React** 的生产级 AI 多智能体（Multi-Agent）对话架构。不只是一个聊天机器人，而是深度融合了**流式工具调用**与**结构化 UI 卡片**的下一代智能分发引擎。
 
-![UI Preview](https://via.placeholder.com/800x400?text=UI+Preview+-+Mobile+View) <!-- TODO: 替换为实际的应用截图 -->
+
 
 ## 📸 运行效果预览
 
