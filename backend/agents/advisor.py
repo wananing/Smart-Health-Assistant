@@ -6,9 +6,10 @@ Uses a simple RAG-style flow:
   1. Query rewriting (if conversational context is needed)
   2. LLM generation with health advisor persona
 """
-from langchain_core.messages import SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
+from rag.knowledge_base import get_knowledge_base
 
 
 def _build_system_prompt(user_info: dict) -> str:
@@ -33,14 +34,27 @@ def _build_system_prompt(user_info: dict) -> str:
 
 async def advisor_node(state: MainAgentState) -> dict:
     """
-    Health advisor agent: generates a helpful, safe health response.
+    Health advisor agent: retrieves relevant knowledge, then generates a
+    helpful, safe health response.
     """
     llm = get_chat_llm("fast")
     user_info = state.get("user_info", {})
     system_prompt = _build_system_prompt(user_info)
 
-    # Build a messages list for the LLM, including the system message
-    lc_messages = [SystemMessage(content=system_prompt)] + list(state["messages"])
+    # Extract the latest user message for RAG retrieval
+    last_user_msg = next(
+        (m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
+        "",
+    )
 
+    # Retrieve relevant knowledge chunks and inject into the system prompt
+    if last_user_msg:
+        kb = get_knowledge_base()
+        docs = await kb.aretrieve(last_user_msg, k=3)
+        rag_context = kb.format_context(docs)
+        if rag_context:
+            system_prompt += f"\n\n## 参考知识库\n以下为相关知识内容，可作为回答参考（请勿照抄，结合用户情况灵活运用）：\n\n{rag_context}"
+
+    lc_messages = [SystemMessage(content=system_prompt)] + list(state["messages"])
     response = await llm.ainvoke(lc_messages)
     return {"messages": [AIMessage(content=response.content)]}

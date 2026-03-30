@@ -14,6 +14,7 @@ from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
+from rag.knowledge_base import get_knowledge_base
 
 
 # ─── MOCK DATA ────────────────────────────────────────────────────────────────
@@ -131,6 +132,16 @@ def get_cross_region_info() -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+@tool
+async def search_insurance_policy(query: str) -> str:
+    """搜索医疗保险政策文件，获取报销规定、覆盖范围、申请流程等政策信息。
+    适用于用户询问政策性问题，如：报销比例、门慢/门特政策、家庭共济、大病保险等。"""
+    kb = get_knowledge_base()
+    docs = await kb.aretrieve(query, k=3)
+    context = kb.format_context(docs)
+    return context if context else "未找到相关医保政策信息，建议拨打当地医保服务热线12393咨询。"
+
+
 # ─── AGENT ────────────────────────────────────────────────────────────────────
 
 INSURANCE_SYSTEM_PROMPT = """你是一个专业的医保政策咨询助手，熟悉中国基本医疗保险制度。
@@ -143,8 +154,9 @@ INSURANCE_SYSTEM_PROMPT = """你是一个专业的医保政策咨询助手，熟
 【工具使用规则】
 - 当用户询问"余额"/"账户"时，调用 get_insurance_balance
 - 当用户询问"消费"/"报销"/"明细"/"看病记录"时，调用 get_consumption_records
-- 当用户询问"缴费"/"扣款"/"单位缴费"时，调用 get_payment_records  
+- 当用户询问"缴费"/"扣款"/"单位缴费"时，调用 get_payment_records
 - 当用户询问"异地"/"外地就医"/"备案"时，调用 get_cross_region_info
+- 当用户询问政策问题（报销比例、门慢政策、大病保险、家庭共济、申请流程等）时，调用 search_insurance_policy
 
 【回答格式】
 工具调用完成后，简洁总结关键数据（1-3句）。数字已由卡片展示，不用大量复述数字。"""
@@ -154,6 +166,7 @@ _INSURANCE_TOOLS = [
     get_consumption_records,
     get_payment_records,
     get_cross_region_info,
+    search_insurance_policy,
 ]
 
 # Tool names that trigger frontend card rendering

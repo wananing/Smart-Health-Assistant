@@ -49,6 +49,11 @@
 - **👵 适老化无障碍设计 (Elder-Friendly Mode)**:
   - 一键切换长辈模式（大字体、高对比度、简化界面操作）。
 
+- **📚 RAG 知识库增强 (Retrieval-Augmented Generation)**:
+  - 内置混合检索引擎：**BM25（精确匹配）+ 密集向量（语义检索）**，通过倒数排名融合（RRF）合并结果，精准命中医学术语的同时兼顾语义理解。
+  - 覆盖三大领域知识库：**常见疾病（高血压/糖尿病/心脏病）、医保政策（门诊/住院报销/异地就医）、检验参考范围（血常规/生化/尿常规）**。
+  - **可插拔后端设计**：嵌入模型支持 HuggingFace 本地（`BAAI/bge-small-zh-v1.5`，离线可用）、OpenAI API、字节 ARK API 三选一；向量库支持 Chroma / FAISS / Qdrant / pgvector 按需切换，全部通过环境变量配置。
+
 - **🛠️ 生产级工程规范**:
   - **Backend**: Python、FastAPI、LangChain、LangGraph、Uvicorn，遵循严格的类型提示和清晰的状态流转（State Graph）。
   - **Frontend**: React、TypeScript、TailwindCSS、Vite，针对移动端进行了像素级还原（Mobile-First）。
@@ -83,6 +88,10 @@ uv sync
 cp .env.example .env
 # 在 .env 中填入你的大模型 API KEY (支持 OpenAI / 星火 / 阿里通义 / 智谱 等兼容格式)
 
+# 【首次运行】构建 RAG 知识库向量索引
+# 默认使用本地 HuggingFace 嵌入模型，首次运行会自动下载约 90 MB 的模型文件
+uv run python -m rag.ingest
+
 # 启动服务 (运行于 8000 端口)
 uv run uvicorn main:app --reload --port 8000
 ```
@@ -107,6 +116,22 @@ npm run dev
 
 ## 🛠 开发与定制
 
+### 如何扩展 RAG 知识库？
+
+1. 在 `backend/rag/documents/` 目录下新建 Markdown 文件，使用 `## 章节标题` 结构组织内容。
+2. 重建向量索引：`uv run python -m rag.ingest --rebuild`
+
+**切换嵌入模型或向量库**（通过环境变量）：
+```bash
+# 切换为 OpenAI 嵌入模型
+EMBEDDING_PROVIDER=openai uv run python -m rag.ingest --rebuild
+
+# 切换为 Qdrant 向量库（需先启动 Qdrant 服务）
+VECTOR_STORE=qdrant QDRANT_URL=http://localhost:6333 uv run python -m rag.ingest --rebuild
+```
+
+详细说明参见 [docs/rag.md](docs/rag.md)。
+
 ### 如何增加一个新的 Agent？
 1. 在 `backend/agents` 目录下新建 `your_agent.py`，并定义包含系统提示词和对应 `tools` 的 `create_react_agent` 实例。
 2. 在 `backend/agents/graph.py` 中，定义一个 `your_node` 函数调用你创建的 agent。将它添加进图节点并连接来自路由器的 Edge。
@@ -125,6 +150,7 @@ npm run dev
 - [x] 智能预问诊 & 报告科室推荐
 - [x] 基于流式卡片的医保服务面板 (对齐真实业务场景)
 - [x] 上下文环境隔离机制 (进入专科诊室 / 退出诊断)
+- [x] RAG 知识库增强：混合检索（BM25 + 密集向量）+ 可插拔嵌入模型与向量库
 - [ ] 接入多模态：图片问诊（OCR化验单、药盒图片识别）
 - [ ] 语音交互接入：实时 ASR 与 TTS（流式语音包反馈）
 

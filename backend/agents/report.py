@@ -4,12 +4,14 @@ Report Agent Node.
 Handles medical lab report interpretation.
 Business Flow:
   1. Receives user message containing report data (pasted text or image description)
-  2. Generates a structured, plain-language explanation of abnormal values
-  3. Includes lifestyle advice related to the findings
+  2. Retrieves lab reference ranges from the knowledge base
+  3. Generates a structured, plain-language explanation of abnormal values
+  4. Includes lifestyle advice related to the findings
 """
-from langchain_core.messages import SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
+from rag.knowledge_base import get_knowledge_base
 
 
 REPORT_SYSTEM_PROMPT = """你是一位专业的检验报告解读助手。用户会向你描述或粘贴化验单数据，你需要：
@@ -33,7 +35,8 @@ REPORT_SYSTEM_PROMPT = """你是一位专业的检验报告解读助手。用户
 
 async def report_node(state: MainAgentState) -> dict:
     """
-    Report agent: interprets medical lab report data.
+    Report agent: interprets medical lab report data, using RAG to retrieve
+    authoritative reference ranges and clinical significance from the knowledge base.
     """
     llm = get_chat_llm("precise")
     user_info = state.get("user_info", {})
@@ -47,6 +50,19 @@ async def report_node(state: MainAgentState) -> dict:
         extra += "\n请使用简单易懂的语言，避免复杂的医学术语。"
 
     system = REPORT_SYSTEM_PROMPT + extra
+
+    # Retrieve lab reference ranges for the mentioned indicators
+    last_user_msg = next(
+        (m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
+        "",
+    )
+    if last_user_msg:
+        kb = get_knowledge_base()
+        docs = await kb.aretrieve(last_user_msg, k=3)
+        rag_context = kb.format_context(docs)
+        if rag_context:
+            system += f"\n\n## 参考检验范围\n以下为相关检验指标的标准参考范围，请以此为依据进行解读：\n\n{rag_context}"
+
     lc_messages = [SystemMessage(content=system)] + list(state["messages"])
     response = await llm.ainvoke(lc_messages)
     return {"messages": [AIMessage(content=response.content)]}

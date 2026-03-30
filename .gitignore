@@ -24,3 +24,7 @@ ENV/
 # tools
 .cursorrules
 .agent/
+CLAUDE.md
+# RAG vector store (auto-generated, rebuild with: python -m rag.ingest)
+backend/rag/chroma_db/
+backend/rag/faiss_index/

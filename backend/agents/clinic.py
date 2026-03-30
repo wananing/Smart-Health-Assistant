@@ -8,9 +8,10 @@ Business Flow:
   3. ask_followup: Generate a gentle follow-up question (if missing info)
   4. conclude_triage: Generate the final triage recommendation
 """
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
+from rag.knowledge_base import get_knowledge_base
 
 CLINIC_SYSTEM_PROMPT = """你是大健康App中的"AI预问诊助手"，态度温和、专业。
 
@@ -28,7 +29,8 @@ CLINIC_SYSTEM_PROMPT = """你是大健康App中的"AI预问诊助手"，态度�
 
 async def clinic_node(state: MainAgentState) -> dict:
     """
-    Clinic agent: conducts a multi-turn symptom collection interview.
+    Clinic agent: conducts a multi-turn symptom collection interview,
+    augmented with relevant clinical guidelines from the knowledge base.
     In practice, LangGraph maintains the conversation state, so each
     invocation picks up where the previous left off.
     """
@@ -45,6 +47,18 @@ async def clinic_node(state: MainAgentState) -> dict:
 
 【当前用户】姓名：{name}  年龄：{age}  既往病史：{history}
 {lang_note}"""
+
+    # Retrieve clinical guidelines relevant to the reported symptoms
+    last_user_msg = next(
+        (m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
+        "",
+    )
+    if last_user_msg:
+        kb = get_knowledge_base()
+        docs = await kb.aretrieve(last_user_msg, k=3)
+        rag_context = kb.format_context(docs)
+        if rag_context:
+            system += f"\n\n## 参考临床知识\n以下为相关疾病知识，用于辅助分诊判断（不要直接引用，结合症状灵活使用）：\n\n{rag_context}"
 
     lc_messages = [SystemMessage(content=system)] + list(state["messages"])
     response = await llm.ainvoke(lc_messages)

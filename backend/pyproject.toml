@@ -13,4 +13,17 @@ dependencies = [
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
     "uvicorn>=0.41.0",
+    # RAG core
+    "langchain>=0.3.0",
+    "langchain-community>=0.3.0",
+    "rank-bm25>=0.2.2",
+    # Embedding backends
+    "langchain-huggingface>=0.1.0",
+    # Vector store backends
+    "langchain-chroma>=0.2.0",
+    "chromadb>=0.5.0",
+    # Optional vector store backends (activate via VECTOR_STORE env var)
+    "faiss-cpu>=1.8.0",
+    "langchain-qdrant>=0.2.0",
+    "langchain-postgres>=0.0.12",
 ]
