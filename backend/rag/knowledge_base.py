@@ -125,6 +125,39 @@ class HealthKnowledgeBase:
         results = await self._retriever.ainvoke(query)
         return results[:k]
 
+    async def amulti_query_retrieve(self, queries: List[str], k: int = 4) -> List[Document]:
+        """
+        Multi-query retrieval (RAG Implementation best practice).
+
+        Runs the hybrid retriever for each query in parallel, then merges and
+        de-duplicates results. Improves recall for complex medical questions
+        where a single query phrasing misses relevant chunks.
+
+        Args:
+            queries: 2-4 varied phrasings of the same information need.
+            k: Maximum unique documents to return after deduplication.
+        """
+        await self._ensure_initialized()
+        assert self._retriever is not None
+
+        # Run all queries concurrently
+        tasks = [self._retriever.ainvoke(q) for q in queries]
+        per_query_results = await asyncio.gather(*tasks)
+
+        # Deduplicate by page_content while preserving first-seen order
+        seen: set[str] = set()
+        merged: List[Document] = []
+        for docs in per_query_results:
+            for doc in docs:
+                key = doc.page_content
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(doc)
+                if len(merged) >= k * 2:
+                    break
+
+        return merged[:k]
+
     def retrieve(self, query: str, k: int = 3) -> List[Document]:
         """
         Synchronous retrieval — used inside LangChain @tool functions where

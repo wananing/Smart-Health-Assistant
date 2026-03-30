@@ -15,7 +15,8 @@ ROUTER_SYSTEM_PROMPT = """你是一个大健康 App 中的"智能意图路由器
 1. "clinic_agent" - 用户描述了具体的身体不适、症状，寻求如何就医、看什么科或者询问可能得了什么病。
 2. "insurance_agent" - 用户询问了医保余额、医保报销政策、消费明细等相关事务。
 3. "report_agent" - 用户让你帮忙看看化验单、检查报告，或者解读检查指标。
-4. "advisor_agent" - 其它通用健康科普、找药品、饮食作息建议或者打招呼问候。
+4. "pharmacy_agent" - 用户询问药品信息（用法用量、副作用、说明书）、药物相互作用、找附近药店、或者根据症状推荐非处方药。
+5. "advisor_agent" - 其它通用健康科普、饮食作息建议或者打招呼问候。
 
 只回复分类 ID 字符串，不要任何其他内容。"""
 
@@ -74,6 +75,8 @@ async def router_node(state: MainAgentState) -> dict:
             next_agent = "insurance_agent"
         elif "report_agent" in raw_clean:
             next_agent = "report_agent"
+        elif "pharmacy_agent" in raw_clean:
+            next_agent = "pharmacy_agent"
         else:
             next_agent = "advisor_agent"
             

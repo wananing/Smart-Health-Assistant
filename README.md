@@ -51,8 +51,13 @@
 
 - **📚 RAG 知识库增强 (Retrieval-Augmented Generation)**:
   - 内置混合检索引擎：**BM25（精确匹配）+ 密集向量（语义检索）**，通过倒数排名融合（RRF）合并结果，精准命中医学术语的同时兼顾语义理解。
-  - 覆盖三大领域知识库：**常见疾病（高血压/糖尿病/心脏病）、医保政策（门诊/住院报销/异地就医）、检验参考范围（血常规/生化/尿常规）**。
+  - 覆盖四大领域知识库：**常见疾病（高血压/糖尿病/心脏病）、医保政策（门诊/住院报销/异地就医）、检验参考范围（血常规/生化/尿常规）、药品用药指南（OTC/处方药/药物相互作用）**。
   - **可插拔后端设计**：嵌入模型支持 HuggingFace 本地（`BAAI/bge-small-zh-v1.5`，离线可用）、OpenAI API、字节 ARK API 三选一；向量库支持 Chroma / FAISS / Qdrant / pgvector 按需切换，全部通过环境变量配置。
+
+- **🧩 可插拔技能系统 (Agent Skills System)**:
+  - 每个智能体均可动态加载**模块化领域技能**，无需修改 Agent 代码即可扩展能力。
+  - 内置 6 项核心技能：急症安全预检（`emergency_triage`）、症状严重度评分（`symptom_scorer`）、健康指标计算（`health_calculator`）、化验单解读（`lab_interpreter`）、慢性病风险评估（`risk_assessor`）、药物剂量计算（`medication_calculator`）。
+  - **零配置自发现**：新增技能只需创建子目录 + `SKILL.md` + `skill.py`，注册表启动时自动发现并挂载，按标签（`clinic` / `advisor` / `report` / `pharmacy`）分发至对应智能体。
 
 - **🛠️ 生产级工程规范**:
   - **Backend**: Python、FastAPI、LangChain、LangGraph、Uvicorn，遵循严格的类型提示和清晰的状态流转（State Graph）。
@@ -132,6 +137,17 @@ VECTOR_STORE=qdrant QDRANT_URL=http://localhost:6333 uv run python -m rag.ingest
 
 详细说明参见 [docs/rag.md](docs/rag.md)。
 
+### 如何为 Agent 添加新技能（Skill）？
+
+技能是智能体的可插拔能力扩展，无需改动 Agent 代码即可增加：
+
+1. 创建目录：`mkdir backend/skills/my_skill && touch backend/skills/my_skill/__init__.py`
+2. 编写 `SKILL.md`（必填 `name`、`description`、`tags` frontmatter）
+3. 实现 `skill.py`（继承 `BaseSkill`，定义 Pydantic I/O 和 `run()` 方法）
+4. 启动后注册表自动发现，无需手动注册
+
+详细说明参见 [docs/skills.md](docs/skills.md)。
+
 ### 如何增加一个新的 Agent？
 1. 在 `backend/agents` 目录下新建 `your_agent.py`，并定义包含系统提示词和对应 `tools` 的 `create_react_agent` 实例。
 2. 在 `backend/agents/graph.py` 中，定义一个 `your_node` 函数调用你创建的 agent。将它添加进图节点并连接来自路由器的 Edge。
@@ -151,6 +167,8 @@ VECTOR_STORE=qdrant QDRANT_URL=http://localhost:6333 uv run python -m rag.ingest
 - [x] 基于流式卡片的医保服务面板 (对齐真实业务场景)
 - [x] 上下文环境隔离机制 (进入专科诊室 / 退出诊断)
 - [x] RAG 知识库增强：混合检索（BM25 + 密集向量）+ 可插拔嵌入模型与向量库
+- [x] 药管家 Agent（Pharmacy Agent）：药品查询、药物相互作用、OTC 推荐、附近药店
+- [x] 可插拔技能系统（Agent Skills）：6 项核心技能 + 零配置自发现注册表
 - [ ] 接入多模态：图片问诊（OCR化验单、药盒图片识别）
 - [ ] 语音交互接入：实时 ASR 与 TTS（流式语音包反馈）
 

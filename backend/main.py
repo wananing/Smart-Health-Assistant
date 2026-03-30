@@ -7,8 +7,19 @@ import json
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from agents.insurance import INSURANCE_CARD_TOOLS
+from agents.pharmacy import PHARMACY_TOOL_TO_CARD_TYPE
 
 load_dotenv()
+
+# ─── OBSERVABILITY: LangSmith Tracing (LangChain Architecture best practice) ──
+# Enable by setting LANGCHAIN_API_KEY in .env
+# LANGCHAIN_TRACING_V2=true
+# LANGCHAIN_PROJECT=bigh-health-assistant
+_langsmith_key = os.environ.get("LANGCHAIN_API_KEY", "")
+if _langsmith_key:
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    os.environ.setdefault("LANGCHAIN_PROJECT", os.environ.get("LANGCHAIN_PROJECT", "bigh-health-assistant"))
+    print("--- [Observability] LangSmith tracing enabled ---", flush=True)
 
 app = FastAPI(title="大健康 AI 后端", version="2.0.0")
 
@@ -38,6 +49,30 @@ _NODE_LABELS = {
     "insurance_node": "进入医保咨询模块",
     "report_node": "进入报告解读模块",
     "advisor_node": "进入健康顾问模块",
+    "pharmacy_node": "进入用药咨询模块",
+}
+
+# --- 技能工具 → 前端展示标签 ---
+_SKILL_LABELS: dict[str, str] = {
+    # insurance tools
+    "get_insurance_balance":    "正在查询医保余额…",
+    "get_consumption_records":  "正在查询消费明细…",
+    "get_payment_records":      "正在查询缴费记录…",
+    "get_cross_region_info":    "正在查询异地就医信息…",
+    "search_insurance_policy":  "正在检索医保政策知识库…",
+    # pharmacy tools
+    "search_drug_info":         "正在查询药品信息…",
+    "check_drug_interaction":   "正在检查药物相互作用…",
+    "find_nearby_pharmacy":     "正在查找附近药店…",
+    "get_otc_recommendation":   "正在检索用药建议…",
+    # skills
+    "load_skill":               "正在加载技能模块…",
+    "emergency_triage":         "正在进行急症安全评估…",
+    "symptom_scorer":           "正在评估症状严重程度…",
+    "health_calculator":        "正在计算健康指标…",
+    "lab_interpreter":          "正在解读化验指标…",
+    "risk_assessor":            "正在评估慢性病风险…",
+    "medication_calculator":    "正在计算用药剂量…",
 }
 
 # --- 医保工具 → 前端卡片 payload type 映射 ---
@@ -105,8 +140,9 @@ async def chat(request: ChatRequest):
         "clinic": "clinic_agent",
         "insurance": "insurance_agent",
         "report": "report_agent",
+        "pharmacy": "pharmacy_agent",
         "general": "advisor_agent",
-        "dashboard": "advisor_agent"
+        "dashboard": "advisor_agent",
     }
 
     initial_state = {
@@ -156,11 +192,12 @@ async def chat(request: ChatRequest):
                         )
                         yield f"data: {payload}\n\n"
 
-                # 4. Tool calls (for future tool integration)
+                # 4. Tool / skill calls
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "tool")
+                    label = _SKILL_LABELS.get(tool_name, f"正在调用：{tool_name}")
                     payload = json.dumps(
-                        {"type": "tool_start", "tool": tool_name, "content": f"正在调用：{tool_name}"},
+                        {"type": "tool_start", "tool": tool_name, "content": label},
                         ensure_ascii=False
                     )
                     yield f"data: {payload}\n\n"
@@ -173,8 +210,11 @@ async def chat(request: ChatRequest):
                     )
                     yield f"data: {payload}\n\n"
 
-                    # For insurance tools, extract the JSON result and emit a card event
-                    card_type = _INSURANCE_TOOL_TO_CARD_TYPE.get(tool_name)
+                    # Emit a structured card event for tools that have card mappings
+                    card_type = (
+                        _INSURANCE_TOOL_TO_CARD_TYPE.get(tool_name)
+                        or PHARMACY_TOOL_TO_CARD_TYPE.get(tool_name)
+                    )
                     if card_type:
                         try:
                             raw_output = event.get("data", {}).get("output", "{}")

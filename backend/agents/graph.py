@@ -11,6 +11,7 @@ from agents.clinic import clinic_node
 from agents.report import report_node
 from agents.advisor import advisor_node
 from agents.insurance import insurance_node
+from agents.pharmacy import pharmacy_node
 
 
 # --- Routing function ---
@@ -20,6 +21,7 @@ _AGENT_MAP = {
     "insurance_agent": "insurance_node",
     "report_agent": "report_node",
     "advisor_agent": "advisor_node",
+    "pharmacy_agent": "pharmacy_node",
 }
 
 def _route_to_agent(state: MainAgentState) -> str:
@@ -38,6 +40,7 @@ def build_graph() -> StateGraph:
     workflow.add_node("insurance_node", insurance_node)
     workflow.add_node("report_node", report_node)
     workflow.add_node("advisor_node", advisor_node)
+    workflow.add_node("pharmacy_node", pharmacy_node)
 
     # 2. Entry point: START -> router
     workflow.add_edge(START, "router")
@@ -51,6 +54,7 @@ def build_graph() -> StateGraph:
             "insurance_node": "insurance_node",
             "report_node": "report_node",
             "advisor_node": "advisor_node",
+            "pharmacy_node": "pharmacy_node",
         }
     )
 
@@ -59,6 +63,7 @@ def build_graph() -> StateGraph:
     workflow.add_edge("insurance_node", END)
     workflow.add_edge("report_node", END)
     workflow.add_edge("advisor_node", END)
+    workflow.add_edge("pharmacy_node", END)
 
     return workflow.compile()
 
