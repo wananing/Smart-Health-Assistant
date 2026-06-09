@@ -29,6 +29,7 @@ export type ChatCardPayload =
     | { type: 'report_analysis'; data: Record<string, unknown> }
     | { type: 'medication_task'; data: Record<string, unknown> }
     | { type: 'hospital_list'; data: Record<string, unknown> }
+    | { type: 'sensitive_image_preview'; data: { imageUrl: string; label: string; hint?: string } }
     /** Context transition cards — injected when entering or exiting a ChatMode */
     | { type: 'mode_welcome'; mode: ChatMode; title: string; description: string }
     | { type: 'mode_exit'; mode: ChatMode; title: string; summary?: string };

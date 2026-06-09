@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -8,6 +8,14 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from agents.insurance import INSURANCE_CARD_TOOLS
 from agents.pharmacy import PHARMACY_TOOL_TO_CARD_TYPE
+from agents.vision import (
+    SCAN_TYPE_TO_AGENT,
+    VisionInputError,
+    compose_agent_message,
+    normalize_scan_type,
+    recognize_image,
+    validate_image_upload,
+)
 
 load_dotenv()
 
@@ -25,7 +33,7 @@ app = FastAPI(title="大健康 AI 后端", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite dev server
+    allow_origins=["http://localhost:5173", "http://localhost:5174"],  # Vite dev servers
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -83,6 +91,19 @@ _INSURANCE_TOOL_TO_CARD_TYPE = {
     "get_cross_region_info": "insurance_cross_region",
 }
 
+_REPORT_TOOL_TO_CARD_TYPE = {
+    "lab_interpreter": "report_analysis",
+}
+
+_MODE_TO_AGENT = {
+    "clinic": "clinic_agent",
+    "insurance": "insurance_agent",
+    "report": "report_agent",
+    "pharmacy": "pharmacy_agent",
+    "general": "advisor_agent",
+    "dashboard": "advisor_agent",
+}
+
 
 class ChatMessage(BaseModel):
     role: str
@@ -103,6 +124,117 @@ class ChatRequest(BaseModel):
     chat_mode: str = "general"
 
 
+def _sse_payload(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _build_lc_messages(messages: list[ChatMessage]) -> list[HumanMessage | AIMessage]:
+    return [
+        HumanMessage(content=msg.content)
+        if msg.role == "user"
+        else AIMessage(content=msg.content)
+        for msg in messages
+        if msg.role in ("user", "assistant") and msg.content.strip()
+    ]
+
+
+def _build_initial_state(
+    messages: list[ChatMessage],
+    user_info: UserInfo | None,
+    active_agent: str,
+) -> dict:
+    user_info_dict = user_info.model_dump() if user_info else {}
+    return {
+        "messages": _build_lc_messages(messages)[-10:],
+        "user_info": user_info_dict,
+        "next_agent": "",
+        "active_agent": active_agent,
+    }
+
+
+def _parse_user_info_json(raw: str) -> UserInfo:
+    try:
+        data = json.loads(raw) if raw else {}
+        if not isinstance(data, dict):
+            raise ValueError("user_info must be an object")
+        return UserInfo(**data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"user_info 格式错误: {exc}") from exc
+
+
+def _parse_messages_json(raw: str) -> list[ChatMessage]:
+    try:
+        data = json.loads(raw) if raw else []
+        if not isinstance(data, list):
+            raise ValueError("messages must be a list")
+        return [ChatMessage(**item) for item in data if isinstance(item, dict)]
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"messages 格式错误: {exc}") from exc
+
+
+async def _stream_agent_events(initial_state: dict, user_info_dict: dict):
+    try:
+        print(f"--- [API] Starting event stream for user_info: {user_info_dict} ---", flush=True)
+        master_app = get_master_app()
+        async for event in master_app.astream_events(initial_state, version="v2"):
+            kind = event["event"]
+            node_name = event.get("name", "")
+
+            if kind not in ("on_chat_model_stream", "on_chat_model_start", "on_chat_model_end"):
+                print(f"--- [Event] {kind} | Node: {node_name} ---", flush=True)
+
+            # 1. LLM is streaming text tokens
+            if kind == "on_chat_model_stream":
+                chunk_content = event["data"]["chunk"].content
+                if chunk_content:
+                    yield _sse_payload({"type": "text", "content": chunk_content})
+
+            # 2. A graph node is starting (shows agent status in UI)
+            elif kind == "on_chain_start":
+                label = _NODE_LABELS.get(node_name)
+                if label:
+                    yield _sse_payload({"type": "node_start", "node": node_name, "content": label})
+
+            # 3. A graph node finished
+            elif kind == "on_chain_end":
+                if node_name in _NODE_LABELS:
+                    yield _sse_payload({"type": "node_end", "node": node_name})
+
+            # 4. Tool / skill calls
+            elif kind == "on_tool_start":
+                tool_name = event.get("name", "tool")
+                label = _SKILL_LABELS.get(tool_name, f"正在调用：{tool_name}")
+                yield _sse_payload({"type": "tool_start", "tool": tool_name, "content": label})
+
+            elif kind == "on_tool_end":
+                tool_name = event.get("name", "tool")
+                yield _sse_payload({"type": "tool_end", "tool": tool_name})
+
+                # Emit a structured card event for tools that have card mappings
+                card_type = (
+                    _INSURANCE_TOOL_TO_CARD_TYPE.get(tool_name)
+                    or PHARMACY_TOOL_TO_CARD_TYPE.get(tool_name)
+                    or _REPORT_TOOL_TO_CARD_TYPE.get(tool_name)
+                )
+                if card_type:
+                    try:
+                        raw_output = event.get("data", {}).get("output", "{}")
+                        # output may be a ToolMessage or raw string
+                        if hasattr(raw_output, "content"):
+                            raw_output = raw_output.content
+                        tool_data = json.loads(raw_output)
+                        yield _sse_payload({"type": "card", "payload": {"type": card_type, "data": tool_data}})
+                    except Exception as parse_err:
+                        print(f"--- [Card] Failed to parse tool output for {tool_name}: {parse_err} ---", flush=True)
+
+        print("--- [API] Event stream finished successfully ---", flush=True)
+        yield 'data: {"type": "finish"}\n\n'
+
+    except Exception as e:
+        print(f"--- [API] Event stream error: {e} ---", flush=True)
+        yield _sse_payload({"type": "error", "content": str(e)})
+
+
 @app.get("/")
 async def root():
     return {"message": "大健康 AI 后端 v2.0 (LangGraph)"}
@@ -119,123 +251,61 @@ async def chat(request: ChatRequest):
     if not ark_api_key:
         raise HTTPException(status_code=500, detail="ARK_API_KEY 未配置")
 
-    # Build initial LangGraph state - preserve both user and assistant messages
-    lc_messages = [
-        HumanMessage(content=msg.content)
-        if msg.role == "user"
-        else AIMessage(content=msg.content)
-        for msg in request.messages
-        if msg.role in ("user", "assistant") and msg.content.strip()
-    ]
+    active_agent = _MODE_TO_AGENT.get(request.chat_mode, "advisor_agent")
+    initial_state = _build_initial_state(request.messages, request.user_info, active_agent)
+    user_info_dict = initial_state["user_info"]
 
-    # Use only the last few messages to avoid token overflow (sliding window)
-    lc_messages = lc_messages[-10:]
+    return StreamingResponse(
+        _stream_agent_events(initial_state, user_info_dict),
+        media_type="text/event-stream",
+    )
 
-    user_info_dict = {}
-    if request.user_info:
-        user_info_dict = request.user_info.model_dump()
-        
-    # Map frontend ChatMode to backend agent keys (must match _AGENT_MAP in graph.py).
-    _MODE_TO_AGENT = {
-        "clinic": "clinic_agent",
-        "insurance": "insurance_agent",
-        "report": "report_agent",
-        "pharmacy": "pharmacy_agent",
-        "general": "advisor_agent",
-        "dashboard": "advisor_agent",
-    }
 
-    initial_state = {
-        "messages": lc_messages,
-        "user_info": user_info_dict,
-        "next_agent": "",
-        "active_agent": _MODE_TO_AGENT.get(request.chat_mode, "advisor_node"),
-    }
+@app.post("/api/vision-chat")
+async def vision_chat(
+    file: UploadFile = File(...),
+    scan_type: str = Form(...),
+    user_info: str = Form("{}"),
+    messages: str = Form("[]"),
+):
+    normalized_scan_type = normalize_scan_type(scan_type)
+    parsed_user_info = _parse_user_info_json(user_info)
+    parsed_messages = _parse_messages_json(messages)
+
+    image_bytes = await file.read()
+    try:
+        validate_image_upload(file.content_type, len(image_bytes))
+    except VisionInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     async def event_generator():
         try:
-            print(f"--- [API] Starting event stream for user_info: {user_info_dict} ---", flush=True)
-            master_app = get_master_app()
-            async for event in master_app.astream_events(initial_state, version="v2"):
-                kind = event["event"]
-                node_name = event.get("name", "")
+            yield _sse_payload({
+                "type": "tool_start",
+                "tool": "vision_model",
+                "content": "正在识别图片内容…",
+            })
+            vision_text = await recognize_image(
+                image_bytes,
+                file.content_type or "",
+                normalized_scan_type,
+            )
+            yield _sse_payload({"type": "tool_end", "tool": "vision_model"})
 
-                if kind not in ("on_chat_model_stream", "on_chat_model_start", "on_chat_model_end"):
-                    print(f"--- [Event] {kind} | Node: {node_name} ---", flush=True)
+            injected_message = compose_agent_message(normalized_scan_type, vision_text)
+            vision_messages = [
+                *parsed_messages[-9:],
+                ChatMessage(role="user", content=injected_message),
+            ]
+            active_agent = SCAN_TYPE_TO_AGENT[normalized_scan_type]
+            initial_state = _build_initial_state(vision_messages, parsed_user_info, active_agent)
+            async for payload in _stream_agent_events(initial_state, initial_state["user_info"]):
+                yield payload
 
-                # 1. LLM is streaming text tokens
-                if kind == "on_chat_model_stream":
-                    chunk_content = event["data"]["chunk"].content
-                    if chunk_content:
-                        payload = json.dumps(
-                            {"type": "text", "content": chunk_content},
-                            ensure_ascii=False
-                        )
-                        yield f"data: {payload}\n\n"
-
-                # 2. A graph node is starting (shows agent status in UI)
-                elif kind == "on_chain_start":
-                    label = _NODE_LABELS.get(node_name)
-                    if label:
-                        payload = json.dumps(
-                            {"type": "node_start", "node": node_name, "content": label},
-                            ensure_ascii=False
-                        )
-                        yield f"data: {payload}\n\n"
-
-                # 3. A graph node finished
-                elif kind == "on_chain_end":
-                    if node_name in _NODE_LABELS:
-                        payload = json.dumps(
-                            {"type": "node_end", "node": node_name},
-                            ensure_ascii=False
-                        )
-                        yield f"data: {payload}\n\n"
-
-                # 4. Tool / skill calls
-                elif kind == "on_tool_start":
-                    tool_name = event.get("name", "tool")
-                    label = _SKILL_LABELS.get(tool_name, f"正在调用：{tool_name}")
-                    payload = json.dumps(
-                        {"type": "tool_start", "tool": tool_name, "content": label},
-                        ensure_ascii=False
-                    )
-                    yield f"data: {payload}\n\n"
-
-                elif kind == "on_tool_end":
-                    tool_name = event.get("name", "tool")
-                    payload = json.dumps(
-                        {"type": "tool_end", "tool": tool_name},
-                        ensure_ascii=False
-                    )
-                    yield f"data: {payload}\n\n"
-
-                    # Emit a structured card event for tools that have card mappings
-                    card_type = (
-                        _INSURANCE_TOOL_TO_CARD_TYPE.get(tool_name)
-                        or PHARMACY_TOOL_TO_CARD_TYPE.get(tool_name)
-                    )
-                    if card_type:
-                        try:
-                            raw_output = event.get("data", {}).get("output", "{}")
-                            # output may be a ToolMessage or raw string
-                            if hasattr(raw_output, "content"):
-                                raw_output = raw_output.content
-                            tool_data = json.loads(raw_output)
-                            card_payload = json.dumps(
-                                {"type": "card", "payload": {"type": card_type, "data": tool_data}},
-                                ensure_ascii=False
-                            )
-                            yield f"data: {card_payload}\n\n"
-                        except Exception as parse_err:
-                            print(f"--- [Card] Failed to parse tool output for {tool_name}: {parse_err} ---", flush=True)
-
-            print("--- [API] Event stream finished successfully ---", flush=True)
-            yield 'data: {"type": "finish"}\n\n'
-
-        except Exception as e:
-            print(f"--- [API] Event stream error: {e} ---", flush=True)
-            payload = json.dumps({"type": "error", "content": str(e)}, ensure_ascii=False)
-            yield f"data: {payload}\n\n"
+        except VisionInputError as exc:
+            yield _sse_payload({"type": "error", "content": str(exc)})
+        except Exception as exc:
+            print(f"--- [Vision] Event stream error: {exc} ---", flush=True)
+            yield _sse_payload({"type": "error", "content": "图片识别失败，请稍后再试"})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

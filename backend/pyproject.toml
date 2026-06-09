@@ -12,6 +12,7 @@ dependencies = [
     "openai>=2.24.0",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
+    "python-multipart>=0.0.20",
     "uvicorn>=0.41.0",
     # RAG core
     "langchain>=0.3.0",

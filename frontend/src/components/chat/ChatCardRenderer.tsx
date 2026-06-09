@@ -6,11 +6,10 @@ import {
 } from 'lucide-react';
 import type { ChatCardPayload } from '../../types';
 import { ModeWelcomeCard, ModeExitCard } from './ModeContextCards';
+import SensitiveImagePreview from '../common/SensitiveImagePreview';
 
 // ─── shared sub-types ───────────────────────────────────────────────────────
 interface InsuranceUser { name?: string; region?: string; insurance_type?: string; }
-interface ClinicData { summary?: string; departments?: string[]; severity?: 'low' | 'medium' | 'high'; }
-interface ReportData { title?: string; hospital?: string; date?: string; isAbnormal?: boolean; status?: string; }
 
 interface ExpenseRecord {
     date: string; hospital: string; department: string;
@@ -299,23 +298,32 @@ const ClinicRecommendationCard: FC<{ data: Record<string, unknown> }> = ({ data 
 };
 
 // ─── 6. Report Analysis Card ────────────────────────────────────────────────
-const ReportAnalysisCard: FC<{ data: Record<string, unknown> }> = ({ data }) => (
+const ReportAnalysisCard: FC<{ data: Record<string, unknown> }> = ({ data }) => {
+    const abnormalCount = Number(data.abnormal_count ?? 0);
+    const isAbnormal = Boolean(data.isAbnormal ?? abnormalCount > 0);
+    const statusText = (data.status as string) ?? (isAbnormal ? `发现 ${abnormalCount || ''} 项异常`.trim() : '结果正常');
+    const summary = data.summary as string | undefined;
+    const date = data.date as string | undefined;
+
+    return (
     <div className="bg-white border border-slate-100 rounded-2xl p-4 flex gap-3 shadow-sm">
-        <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${data.isAbnormal ? 'bg-rose-50 text-rose-500' : 'bg-teal-50 text-teal-500'}`}>
+        <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${isAbnormal ? 'bg-rose-50 text-rose-500' : 'bg-teal-50 text-teal-500'}`}>
             <FileText size={20} />
         </div>
-        <div>
+        <div className="min-w-0">
             <div className="font-bold text-slate-800 text-sm">{(data.title as string) ?? '检验报告'}</div>
             <div className="text-xs text-slate-500 mt-0.5">{(data.hospital as string) ?? ''}</div>
             <div className="flex gap-2 mt-2 items-center">
-                <span className={`text-[11px] px-2 py-0.5 rounded-md font-bold ${data.isAbnormal ? 'bg-rose-100 text-rose-600' : 'bg-teal-100 text-teal-600'}`}>
-                    {(data.status as string) ?? (data.isAbnormal ? '有异常项' : '结果正常')}
+                <span className={`text-[11px] px-2 py-0.5 rounded-md font-bold ${isAbnormal ? 'bg-rose-100 text-rose-600' : 'bg-teal-100 text-teal-600'}`}>
+                    {statusText}
                 </span>
-                {data.date && <span className="text-[10px] text-slate-400">{data.date as string}</span>}
+                {date && <span className="text-[10px] text-slate-400">{date}</span>}
             </div>
+            {summary && <p className="text-xs text-slate-600 mt-2 leading-relaxed">{summary}</p>}
         </div>
     </div>
-);
+    );
+};
 
 // ─── Card Factory ────────────────────────────────────────────────────────────
 const ChatCardRenderer: FC<{ payload: ChatCardPayload }> = ({ payload }) => {
@@ -328,6 +336,7 @@ const ChatCardRenderer: FC<{ payload: ChatCardPayload }> = ({ payload }) => {
         case 'insurance_cross_region': return <InsuranceCrossRegionCard data={payload.data} />;
         case 'clinic_recommendation': return <ClinicRecommendationCard data={payload.data} />;
         case 'report_analysis': return <ReportAnalysisCard data={payload.data} />;
+        case 'sensitive_image_preview': return <SensitiveImagePreview {...payload.data} />;
         default: return null;
     }
 };

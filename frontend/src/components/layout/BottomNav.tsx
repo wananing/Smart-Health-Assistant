@@ -2,12 +2,20 @@ import { useState, useEffect } from 'react';
 import { useGlobalStore } from '../../store/GlobalContext';
 import { MODULES } from '../../data/mockData';
 import type { ChatMessage, ChatMode } from '../../types';
+import type { VisionScanType } from '../../services/chatService';
 import SuggestionScroller from '../chat/SuggestionScroller';
 import InputBar from '../chat/InputBar';
+
+const getVisionUserText = (scanType: VisionScanType) => {
+    if (scanType === 'report') return '上传了一张检查报告图片，请帮我解读。';
+    if (scanType === 'trace_code') return '上传了一张药品追溯码图片，请帮我查看用药信息。';
+    return '上传了一张药盒图片，请帮我看看这个药。';
+};
 
 const BottomNav = () => {
     const { isElderMode, chatMode, enterChatMode, exitChatMode, messages, setMessages } = useGlobalStore();
     const [inputValue, setInputValue] = useState('');
+    const [isVisionUploading, setIsVisionUploading] = useState(false);
 
     useEffect(() => {
         const handleCustomMessage = (e: Event) => {
@@ -101,10 +109,110 @@ const BottomNav = () => {
         );
     };
 
+    const handleVisionUpload = async (file: File, scanType: VisionScanType) => {
+        if (!file.type.startsWith('image/')) return;
+
+        setIsVisionUploading(true);
+
+        const assistantMsgId = `msg-ai-vision-${Date.now()}`;
+        const previewUrl = URL.createObjectURL(file);
+        const userMsg: ChatMessage = {
+            id: `msg-user-vision-${Date.now()}`,
+            role: 'user',
+            text: getVisionUserText(scanType),
+            timestamp: Date.now(),
+            cards: scanType === 'report'
+                ? [{
+                    type: 'sensitive_image_preview',
+                    data: {
+                        imageUrl: previewUrl,
+                        label: '报告图片',
+                    },
+                }]
+                : undefined,
+        };
+
+        const assistantMsg: ChatMessage = {
+            id: assistantMsgId,
+            role: 'assistant',
+            text: '',
+            timestamp: Date.now(),
+            steps: [],
+            isGenerating: true,
+        };
+
+        const updatedMessages = [...messages, userMsg];
+        setMessages([...updatedMessages, assistantMsg]);
+
+        const updateAssistant = (updater: (msg: ChatMessage) => ChatMessage) => {
+            setMessages(prev =>
+                prev.map(m => m.id === assistantMsgId ? updater({ ...m }) : m)
+            );
+        };
+
+        const { streamVisionChat } = await import('../../services/chatService');
+
+        await streamVisionChat(
+            file,
+            scanType,
+            updatedMessages,
+            {
+                onChunk: (chunk) => {
+                    updateAssistant(m => ({ ...m, text: m.text + chunk }));
+                },
+                onStep: (step) => {
+                    updateAssistant(m => ({
+                        ...m,
+                        steps: [...(m.steps ?? []), step],
+                    }));
+                },
+                onStepFinish: (nodeOrTool: string) => {
+                    updateAssistant(m => ({
+                        ...m,
+                        steps: (m.steps ?? []).map(s =>
+                            (s.node === nodeOrTool || s.tool === nodeOrTool) && !s.isFinished
+                                ? { ...s, isFinished: true }
+                                : s
+                        ),
+                    }));
+                },
+                onModeChange: (mode: ChatMode) => {
+                    if (mode === 'general') {
+                        exitChatMode();
+                    } else {
+                        enterChatMode(mode);
+                    }
+                },
+                onCard: (card) => {
+                    updateAssistant(m => ({
+                        ...m,
+                        cards: [...(m.cards ?? []), card],
+                    }));
+                },
+                onDone: () => {
+                    setIsVisionUploading(false);
+                    updateAssistant(m => ({ ...m, isGenerating: false }));
+                },
+                onError: (err) => {
+                    console.error("Vision chat error:", err);
+                    setIsVisionUploading(false);
+                    updateAssistant(m => ({ ...m, text: m.text + "\n[图片识别失败，请稍后再试]", isGenerating: false }));
+                }
+            },
+            { elder_mode: isElderMode },
+        );
+    };
+
     return (
         <footer className="absolute bottom-0 left-0 w-full p-4 bg-white/95 backdrop-blur-md border-t border-slate-100 z-40 rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.03)] pb-6">
             <SuggestionScroller onSend={handleSend} />
-            <InputBar inputValue={inputValue} setInputValue={setInputValue} onSend={() => handleSend()} />
+            <InputBar
+                inputValue={inputValue}
+                setInputValue={setInputValue}
+                onSend={() => handleSend()}
+                onVisionUpload={handleVisionUpload}
+                isVisionUploading={isVisionUploading}
+            />
 
             {/* Nav icons — switch chatMode context instead of navigating to pages */}
             <div className="flex justify-between mt-5 px-3">

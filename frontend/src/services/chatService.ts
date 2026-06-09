@@ -30,8 +30,108 @@ export interface UserInfoPayload {
     region?: string;
 }
 
+export type VisionScanType = 'report' | 'drug_box' | 'trace_code';
+
 let _stepCounter = 0;
 const genStepId = () => `step-${++_stepCounter}-${Date.now()}`;
+
+const consumeSseResponse = async (response: Response, options: ChatServiceOptions) => {
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    if (!response.body) {
+        throw new Error("ReadableStream not yet supported in this browser.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let done = false;
+    let buffer = '';
+
+    while (!done) {
+        const { value, done: readerDone } = await reader.read();
+        done = readerDone;
+
+        if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            // Keep the last (potentially incomplete) line in the buffer
+            buffer = lines.pop() ?? '';
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const jsonStr = line.slice(6).trim();
+                if (!jsonStr) continue;
+
+                try {
+                    const data = JSON.parse(jsonStr);
+
+                    switch (data.type) {
+                        case 'text':
+                            options.onChunk(data.content ?? '');
+                            break;
+
+                        case 'node_start': {
+                            const step: AgentStep = {
+                                id: genStepId(),
+                                type: 'node_start',
+                                node: data.node,
+                                content: data.content ?? `进入节点：${data.node}`,
+                                isFinished: false,
+                            };
+                            options.onStep(step);
+                            // Automatically switch chatMode based on which agent node started
+                            console.log('[chatService] node_start:', data.node, '→ mode:', NODE_TO_CHAT_MODE[data.node] ?? '(no mapping)');
+                            if (data.node && NODE_TO_CHAT_MODE[data.node] && options.onModeChange) {
+                                console.log('[chatService] calling onModeChange:', NODE_TO_CHAT_MODE[data.node]);
+                                options.onModeChange(NODE_TO_CHAT_MODE[data.node]);
+                            }
+                            break;
+                        }
+
+                        case 'node_end':
+                            options.onStepFinish(data.node ?? '');
+                            break;
+
+                        case 'tool_start': {
+                            const step: AgentStep = {
+                                id: genStepId(),
+                                type: 'tool_start',
+                                tool: data.tool,
+                                content: data.content ?? `调用工具：${data.tool}`,
+                                isFinished: false,
+                            };
+                            options.onStep(step);
+                            break;
+                        }
+
+                        case 'tool_end':
+                            options.onStepFinish(data.tool ?? '');
+                            break;
+
+                        case 'card':
+                            if (options.onCard && data.payload) {
+                                options.onCard(data.payload as ChatCardPayload);
+                            }
+                            break;
+
+                        case 'finish':
+                            done = true;
+                            break;
+
+                        case 'error':
+                            options.onError(new Error(data.content ?? '未知错误'));
+                            done = true;
+                            break;
+                    }
+                } catch {
+                    // Ignore malformed JSON lines
+                }
+            }
+        }
+    }
+};
 
 export const streamChat = async (
     messages: ChatMessage[],
@@ -59,98 +159,38 @@ export const streamChat = async (
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        if (!response.body) {
-            throw new Error("ReadableStream not yet supported in this browser.");
-        }
+        await consumeSseResponse(response, options);
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let done = false;
-        let buffer = '';
+        options.onDone();
 
-        while (!done) {
-            const { value, done: readerDone } = await reader.read();
-            done = readerDone;
+    } catch (err) {
+        options.onError(err instanceof Error ? err : new Error(String(err)));
+    }
+};
 
-            if (value) {
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                // Keep the last (potentially incomplete) line in the buffer
-                buffer = lines.pop() ?? '';
+export const streamVisionChat = async (
+    file: File,
+    scanType: VisionScanType,
+    messages: ChatMessage[],
+    options: ChatServiceOptions,
+    userInfo?: UserInfoPayload,
+) => {
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('scan_type', scanType);
+        formData.append('user_info', JSON.stringify(userInfo ?? {}));
+        formData.append('messages', JSON.stringify(messages.map(msg => ({
+            role: msg.role,
+            content: msg.text
+        }))));
 
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    const jsonStr = line.slice(6).trim();
-                    if (!jsonStr) continue;
+        const response = await fetch('http://localhost:8000/api/vision-chat', {
+            method: 'POST',
+            body: formData
+        });
 
-                    try {
-                        const data = JSON.parse(jsonStr);
-
-                        switch (data.type) {
-                            case 'text':
-                                options.onChunk(data.content ?? '');
-                                break;
-
-                            case 'node_start': {
-                                const step: AgentStep = {
-                                    id: genStepId(),
-                                    type: 'node_start',
-                                    node: data.node,
-                                    content: data.content ?? `进入节点：${data.node}`,
-                                    isFinished: false,
-                                };
-                                options.onStep(step);
-                                // Automatically switch chatMode based on which agent node started
-                                console.log('[chatService] node_start:', data.node, '→ mode:', NODE_TO_CHAT_MODE[data.node] ?? '(no mapping)');
-                                if (data.node && NODE_TO_CHAT_MODE[data.node] && options.onModeChange) {
-                                    console.log('[chatService] calling onModeChange:', NODE_TO_CHAT_MODE[data.node]);
-                                    options.onModeChange(NODE_TO_CHAT_MODE[data.node]);
-                                }
-                                break;
-                            }
-
-                            case 'node_end':
-                                options.onStepFinish(data.node ?? '');
-                                break;
-
-                            case 'tool_start': {
-                                const step: AgentStep = {
-                                    id: genStepId(),
-                                    type: 'tool_start',
-                                    tool: data.tool,
-                                    content: data.content ?? `调用工具：${data.tool}`,
-                                    isFinished: false,
-                                };
-                                options.onStep(step);
-                                break;
-                            }
-
-                            case 'tool_end':
-                                options.onStepFinish(data.tool ?? '');
-                                break;
-
-                            case 'card':
-                                if (options.onCard && data.payload) {
-                                    options.onCard(data.payload as ChatCardPayload);
-                                }
-                                break;
-
-                            case 'finish':
-                                done = true;
-                                break;
-
-                            case 'error':
-                                options.onError(new Error(data.content ?? '未知错误'));
-                                done = true;
-                                break;
-                        }
-                    } catch {
-                        // Ignore malformed JSON lines
-                    }
-                }
-            }
-        }
-
+        await consumeSseResponse(response, options);
         options.onDone();
 
     } catch (err) {
