@@ -3,11 +3,12 @@
 > 🚀 **开源版 医疗/医保 多智能体对话系统** —— 对标国内头部平台（如蚂蚁阿福、支付宝健康管家等）的 AI 健康助手落地架构。
 
 基于 **LangGraph + FastAPI + React** 的完整 AI 多智能体全栈参考实现。不只是一个聊天机器人，而是深度融合了**流式工具调用**与**结构化 UI 卡片**的智能分发引擎。
+- 支持 **开源可观测与评估**：OpenTelemetry/OpenInference 链路、Jaeger 本地后端与 DeepEval 回归评估。详见 [docs/observability-evals.md](docs/observability-evals.md)
 - 已支持 **多模态图片识别**：拍照看报告、拍照问药与药品追溯码识别
 - 支持 **多模型配置**：聊天模型可切换 ARK、OpenAI、DeepSeek、通义千问、智谱或任意 OpenAI-compatible 服务；图片模型可独立选择支持视觉输入的兼容模型
 - 新增支持 **RAG 知识库增强**，包括常见疾病、医保政策、检验参考范围、药品用药指南等。 详见 [docs/rag.md](docs/rag.md)
 - 新增支持 **Agent Skills System**，每个智能体均可动态加载**模块化领域技能**，无需修改 Agent 代码即可扩展能力。 详见 [docs/skills.md](docs/skills.md)
-- 支持 **开源可观测与评估**：OpenTelemetry/OpenInference 链路、Jaeger 本地后端与 DeepEval 回归评估。详见 [docs/observability-evals.md](docs/observability-evals.md)
+
 
 
 
