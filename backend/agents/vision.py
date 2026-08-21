@@ -2,15 +2,16 @@
 Vision input adapter for report interpretation and pharmacy photo flows.
 
 This module keeps image recognition separate from medical/pharmacy reasoning:
-the Volcengine multimodal model extracts visible facts, then the existing
+an OpenAI-compatible multimodal model extracts visible facts, then the existing
 report/pharmacy agents interpret those facts.
 """
 from __future__ import annotations
 
 import base64
-import os
 import re
 from typing import Literal
+
+from agents.llm import LLMConfigurationError, resolve_model_settings
 
 
 VisionScanType = Literal["report", "drug_box", "trace_code"]
@@ -23,8 +24,6 @@ SCAN_TYPE_TO_AGENT = {
     "drug_box": "pharmacy_agent",
     "trace_code": "pharmacy_agent",
 }
-
-_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 
 
 class VisionInputError(ValueError):
@@ -99,20 +98,20 @@ def compose_agent_message(scan_type: VisionScanType, vision_text: str) -> str:
     safe_text = redact_sensitive_text(vision_text).strip() or "无法确认"
     if scan_type == "report":
         return (
-            "用户上传了一张检验报告图片，个人身份信息已隐藏。火山视觉模型识别结果：\n"
+            "用户上传了一张检验报告图片，个人身份信息已隐藏。视觉模型识别结果：\n"
             f"{safe_text}\n\n"
             "请基于以上内容进行报告解读。"
         )
 
     if scan_type == "trace_code":
         return (
-            "用户上传了一张药品追溯码或药品包装图片。火山视觉模型识别结果：\n"
+            "用户上传了一张药品追溯码或药品包装图片。视觉模型识别结果：\n"
             f"{safe_text}\n\n"
             "请说明可识别出的药品信息、用药注意事项，并提醒用户真伪需以正规追溯平台查询为准。"
         )
 
     return (
-        "用户上传了一张药盒图片。火山视觉模型识别结果：\n"
+        "用户上传了一张药盒图片。视觉模型识别结果：\n"
         f"{safe_text}\n\n"
         "请说明这个药的用途、用法用量、禁忌、注意事项，以及是否适合当前用户。"
     )
@@ -123,34 +122,31 @@ def image_to_data_url(image_bytes: bytes, content_type: str) -> str:
     return f"data:{content_type};base64,{encoded}"
 
 
-def _ark_api_key() -> str:
-    return os.environ.get("ARK_API_KEY", "")
-
-
-def _vision_model_id() -> str:
-    return os.environ.get("ARK_VISION_MODEL_ID") or os.environ.get("ARK_MODEL_ID", "doubao-seed-1-6-flash-250828")
-
-
 async def recognize_image(image_bytes: bytes, content_type: str, scan_type: VisionScanType) -> str:
     """
-    Call Volcengine ARK multimodal model and return redacted visible facts.
+    Call the configured multimodal model and return redacted visible facts.
 
     The returned content is user-provided context for downstream agents, never a
     system prompt.
     """
     validate_image_upload(content_type, len(image_bytes))
 
-    api_key = _ark_api_key()
-    if not api_key:
-        raise VisionInputError("ARK_API_KEY is not configured")
+    try:
+        settings = resolve_model_settings(purpose="vision")
+    except LLMConfigurationError as exc:
+        raise VisionInputError(str(exc)) from exc
 
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key=api_key, base_url=_BASE_URL)
-    response = await client.chat.completions.create(
-        model=_vision_model_id(),
-        temperature=0,
-        messages=[
+    client_kwargs = {"api_key": settings.api_key}
+    if settings.base_url:
+        client_kwargs["base_url"] = settings.base_url
+    client = AsyncOpenAI(**client_kwargs)
+
+    request = {
+        "model": settings.model,
+        "temperature": 0,
+        "messages": [
             {
                 "role": "user",
                 "content": [
@@ -162,8 +158,10 @@ async def recognize_image(image_bytes: bytes, content_type: str, scan_type: Visi
                 ],
             }
         ],
-        extra_body={"thinking": {"type": "disabled"}},
-    )
+    }
+    if settings.extra_body:
+        request["extra_body"] = settings.extra_body
+    response = await client.chat.completions.create(**request)
 
     content = response.choices[0].message.content if response.choices else ""
     if isinstance(content, list):

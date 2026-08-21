@@ -31,7 +31,6 @@ async def router_node(state: MainAgentState) -> dict:
     # Get the last human message
     last_message = state["messages"][-1]
     user_text = last_message.content if hasattr(last_message, "content") else str(last_message)
-    print(f"--- [Router] User text: {user_text} ---", flush=True)
 
     # 1. Check for explicit system intents (Frontend forced mode switches)
     # Note: SYSTEM_INTENT strings are reserved for future use if the frontend
@@ -47,7 +46,7 @@ async def router_node(state: MainAgentState) -> dict:
     EXIT_PHRASES = {"退出", "结束", "结束问诊", "不看了", "不用了", "我要退出", "取消", "退出诊室", "退出模式", "退出功能"}
     user_text_stripped = user_text.strip()
     if any(phrase in user_text_stripped for phrase in EXIT_PHRASES):
-        print(f"--- [Router] User requested exit ('{user_text_stripped}'), routing back to advisor_agent ---", flush=True)
+        print("--- [Router] User requested exit, routing back to advisor_agent ---", flush=True)
         return {"next_agent": "advisor_agent", "active_agent": "advisor_agent"}
     
     if active_agent and active_agent not in ("advisor_agent", ""):
@@ -66,8 +65,6 @@ async def router_node(state: MainAgentState) -> dict:
         # Remove all whitespace (spaces, newlines, tabs) to handle LLM formatting quirks (e.g. 'clin\nic_agent')
         raw_clean = "".join(raw_content_lower.split())
         
-        print(f"--- [Router] RAW response repr: {repr(response.content)} ---", flush=True)
-
         # Robust substring matching
         if "clinic_agent" in raw_clean:
             next_agent = "clinic_agent"

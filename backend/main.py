@@ -1,12 +1,13 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import os
 import json
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from agents.insurance import INSURANCE_CARD_TOOLS
+from agents.llm import LLMConfigurationError, resolve_model_settings
 from agents.pharmacy import PHARMACY_TOOL_TO_CARD_TYPE
 from agents.vision import (
     SCAN_TYPE_TO_AGENT,
@@ -16,20 +17,25 @@ from agents.vision import (
     recognize_image,
     validate_image_upload,
 )
+from observability import configure_observability
 
 load_dotenv()
 
-# ─── OBSERVABILITY: LangSmith Tracing (LangChain Architecture best practice) ──
-# Enable by setting LANGCHAIN_API_KEY in .env
-# LANGCHAIN_TRACING_V2=true
-# LANGCHAIN_PROJECT=bigh-health-assistant
-_langsmith_key = os.environ.get("LANGCHAIN_API_KEY", "")
-if _langsmith_key:
-    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
-    os.environ.setdefault("LANGCHAIN_PROJECT", os.environ.get("LANGCHAIN_PROJECT", "bigh-health-assistant"))
-    print("--- [Observability] LangSmith tracing enabled ---", flush=True)
+_observability_runtime = configure_observability()
+if _observability_runtime.provider != "none":
+    print(
+        f"--- [Observability] {_observability_runtime.provider} tracing enabled ---",
+        flush=True,
+    )
 
-app = FastAPI(title="大健康 AI 后端", version="2.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    _observability_runtime.shutdown()
+
+
+app = FastAPI(title="大健康 AI 后端", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -172,9 +178,9 @@ def _parse_messages_json(raw: str) -> list[ChatMessage]:
         raise HTTPException(status_code=400, detail=f"messages 格式错误: {exc}") from exc
 
 
-async def _stream_agent_events(initial_state: dict, user_info_dict: dict):
+async def _stream_agent_events(initial_state: dict):
     try:
-        print(f"--- [API] Starting event stream for user_info: {user_info_dict} ---", flush=True)
+        print("--- [API] Starting event stream ---", flush=True)
         master_app = get_master_app()
         async for event in master_app.astream_events(initial_state, version="v2"):
             kind = event["event"]
@@ -247,16 +253,15 @@ async def health():
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
-    ark_api_key = os.environ.get("ARK_API_KEY", "")
-    if not ark_api_key:
-        raise HTTPException(status_code=500, detail="ARK_API_KEY 未配置")
+    try:
+        resolve_model_settings()
+    except LLMConfigurationError as exc:
+        raise HTTPException(status_code=500, detail=f"大模型配置错误：{exc}") from exc
 
     active_agent = _MODE_TO_AGENT.get(request.chat_mode, "advisor_agent")
     initial_state = _build_initial_state(request.messages, request.user_info, active_agent)
-    user_info_dict = initial_state["user_info"]
-
     return StreamingResponse(
-        _stream_agent_events(initial_state, user_info_dict),
+        _stream_agent_events(initial_state),
         media_type="text/event-stream",
     )
 
@@ -299,7 +304,7 @@ async def vision_chat(
             ]
             active_agent = SCAN_TYPE_TO_AGENT[normalized_scan_type]
             initial_state = _build_initial_state(vision_messages, parsed_user_info, active_agent)
-            async for payload in _stream_agent_events(initial_state, initial_state["user_info"]):
+            async for payload in _stream_agent_events(initial_state):
                 yield payload
 
         except VisionInputError as exc:

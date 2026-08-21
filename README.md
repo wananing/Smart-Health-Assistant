@@ -2,10 +2,12 @@
 
 > 🚀 **开源版 医疗/医保 多智能体对话系统** —— 对标国内头部平台（如蚂蚁阿福、支付宝健康管家等）的 AI 健康助手落地架构。
 
-基于 **LangGraph + FastAPI + React** 的生产级 AI 多智能体（Multi-Agent）对话架构。不只是一个聊天机器人，而是深度融合了**流式工具调用**与**结构化 UI 卡片**的下一代智能分发引擎。
-- **多模态图片识别能力上线** 拍照看报告，拍照问药等
+基于 **LangGraph + FastAPI + React** 的完整 AI 多智能体全栈参考实现。不只是一个聊天机器人，而是深度融合了**流式工具调用**与**结构化 UI 卡片**的智能分发引擎。
+- 已支持 **多模态图片识别**：拍照看报告、拍照问药与药品追溯码识别
+- 支持 **多模型配置**：聊天模型可切换 ARK、OpenAI、DeepSeek、通义千问、智谱或任意 OpenAI-compatible 服务；图片模型可独立选择支持视觉输入的兼容模型
 - 新增支持 **RAG 知识库增强**，包括常见疾病、医保政策、检验参考范围、药品用药指南等。 详见 [docs/rag.md](docs/rag.md)
 - 新增支持 **Agent Skills System**，每个智能体均可动态加载**模块化领域技能**，无需修改 Agent 代码即可扩展能力。 详见 [docs/skills.md](docs/skills.md)
+- 支持 **开源可观测与评估**：OpenTelemetry/OpenInference 链路、Jaeger 本地后端与 DeepEval 回归评估。详见 [docs/observability-evals.md](docs/observability-evals.md)
 
 
 
@@ -43,7 +45,7 @@
   - **支持预问诊** (Clinic Agent)：多轮追问症状（部位、持续时间、伴随症状等），最终生成带严重等级的就诊科室建议卡片。
   - **支持医保服务** (Insurance Agent)：接入模拟医保接口，查询医保余额、消费明细、缴费记录、异地就医备案，数据通过卡片直出。
   - **支持健康问答** (Advisor Agent)：通用的医学科普与生活建议。
-  - *随时可扩展药管家 (Pharmacy) 与报告解读 (Report) Agent。*
+  - **支持药管家与报告解读**：提供药品信息、相互作用查询、拍照问药，以及检查报告图片和检验指标解读。
 
 - **⚡ 丝滑的 UI 端到端体验 (SSE + Server-Driven UI)**:
   - **后端接管 UI 渲染**：工具调用完成后，后端不仅返回文字总结，还通过 SSE 下发 `{"type": "card", "payload": ...}` 事件。
@@ -62,7 +64,11 @@
   - 内置 6 项核心技能：急症安全预检（`emergency_triage`）、症状严重度评分（`symptom_scorer`）、健康指标计算（`health_calculator`）、化验单解读（`lab_interpreter`）、慢性病风险评估（`risk_assessor`）、药物剂量计算（`medication_calculator`）。
   - **零配置自发现**：新增技能只需创建子目录 + `SKILL.md` + `skill.py`，注册表启动时自动发现并挂载，按标签（`clinic` / `advisor` / `report` / `pharmacy`）分发至对应智能体。
 
-- **🛠️ 生产级工程规范**:
+- **🔭 开源可观测与评估 (Observability & Evals)**:
+  - 使用 OpenInference 自动采集 LangGraph 节点、文本/视觉模型与工具调用，以标准 OTLP 输出到 Jaeger 或其他 OpenTelemetry 后端。
+  - 内置匿名回归样例与严格本地评分，可选 DeepEval；医疗文本和图片默认不进入 Trace，DeepEval 遥测默认关闭。
+
+- **🛠️ 完整全栈工程实现**:
   - **Backend**: Python、FastAPI、LangChain、LangGraph、Uvicorn，遵循严格的类型提示和清晰的状态流转（State Graph）。
   - **Frontend**: React、TypeScript、TailwindCSS、Vite，针对移动端进行了像素级还原（Mobile-First）。
 
@@ -74,7 +80,8 @@
 
 1. **Agent State**: `messages`, `active_agent`, `userInfo`。
 2. **Router Node**: 识别用户意图，如果已经处于特定 Agent 的会话中，则“锁定”上下文直到用户主动退出（发送“结束/不看了”）。
-3. **Event Stream**: 后端使用异步 Generator 透传 LangGraph 的内部运行状态（`node_start`, `tool_start`, `tool_end`, `card`）。前端依据流日志渲染**实时思考链 (Thinking Steps)**。
+3. **Event Stream**: 后端使用异步 Generator 透传 LangGraph 的内部运行状态（`node_start`, `tool_start`, `tool_end`, `card`）。前端依据流事件展示 **Agent 执行状态与工具调用进度**。
+4. **Lifecycle**: 通过仓库内评估集复现问题、使用 OTLP Trace 定位节点，再以相同 case 验证迭代结果。
 
 ---
 
@@ -89,12 +96,12 @@
 ```bash
 cd backend
 
-# 安装依赖项 (如果没有 uv 可以使用 pip install -r requirements.txt)
+# 安装依赖项
 uv sync
 
 # 配置环境变量
 cp .env.example .env
-# 在 .env 中填入你的大模型 API KEY (支持 OpenAI / 星火 / 阿里通义 / 智谱 等兼容格式)
+# 在 .env 中配置模型厂商、API Key 与模型名称，支持多家 OpenAI-compatible 服务
 
 # 【首次运行】构建 RAG 知识库向量索引
 # 默认使用本地 HuggingFace 嵌入模型，首次运行会自动下载约 90 MB 的模型文件
@@ -151,6 +158,20 @@ VECTOR_STORE=qdrant QDRANT_URL=http://localhost:6333 uv run python -m rag.ingest
 
 详细说明参见 [docs/skills.md](docs/skills.md)。
 
+### 如何监控和评估 Agent？
+
+```bash
+# 仓库根目录：启动本地 Jaeger
+docker compose -f compose.observability.yml up -d
+
+# backend/：运行匿名回归集；DeepEval 为可选依赖
+cd backend
+uv run python -m evals
+uv run --extra eval python -m evals --provider deepeval
+```
+
+链路开关、隐私默认值和评估样例格式参见 [docs/observability-evals.md](docs/observability-evals.md)。
+
 ### 如何增加一个新的 Agent？
 1. 在 `backend/agents` 目录下新建 `your_agent.py`，并定义包含系统提示词和对应 `tools` 的 `create_react_agent` 实例。
 2. 在 `backend/agents/graph.py` 中，定义一个 `your_node` 函数调用你创建的 agent。将它添加进图节点并连接来自路由器的 Edge。
@@ -172,7 +193,8 @@ VECTOR_STORE=qdrant QDRANT_URL=http://localhost:6333 uv run python -m rag.ingest
 - [x] RAG 知识库增强：混合检索（BM25 + 密集向量）+ 可插拔嵌入模型与向量库
 - [x] 药管家 Agent（Pharmacy Agent）：药品查询、药物相互作用、OTC 推荐、附近药店
 - [x] 可插拔技能系统（Agent Skills）：6 项核心技能 + 零配置自发现注册表
-- [ ] 接入多模态：图片问诊（OCR化验单、药盒图片识别）
+- [x] 多模态图片识别：拍照看报告、拍照问药与药品追溯码识别（可配置兼容模型）
+- [x] Agent 生命周期基础设施：OpenTelemetry/OpenInference 链路、Jaeger 与 DeepEval 回归评估
 - [ ] 语音交互接入：实时 ASR 与 TTS（流式语音包反馈）
 
 ## 📄 开源协议

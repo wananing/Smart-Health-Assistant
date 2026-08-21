@@ -2,36 +2,35 @@
 
 ## Project Structure & Module Organization
 
-This is a Smart Health Assistant with a Python FastAPI/LangGraph backend and React/Vite frontend. Backend lives in `backend/`: `main.py` is the API/SSE entrypoint, `agents/` contains the router and specialist agents, `skills/` contains auto-discovered tools, and `rag/` contains retrieval code plus knowledge documents in `rag/documents/`. Backend `test_*.py` files sit at its root.
+This project pairs a FastAPI/LangGraph backend with a React/Vite frontend. Backend lives in `backend/`: `main.py` exposes API/SSE endpoints, `agents/` contains specialists, `skills/` contains tools, `rag/` contains retrieval code, and `evals/` contains regression cases. Tests and manual checks are `backend/test_*.py` files.
 
-Frontend lives in `frontend/src/`: `screens/` are app views, `components/` contains domain UI, `store/` holds shared context, `services/` contains API clients, and `types/` defines shared contracts. Assets are in `frontend/public/` and `frontend/src/assets/`. Docs are under `docs/`, `backend/docs/`, and `frontend/docs/`.
+Frontend source is in `frontend/src/`: views use `screens/`, reusable UI uses `components/`, and shared state, clients, and contracts use `store/`, `services/`, and `types/`. Assets belong in `frontend/public/` or `frontend/src/assets/`; documentation lives in the three `docs/` directories.
 
 ## Build, Test, and Development Commands
 
-- `cd backend && uv sync`: install Python 3.13 dependencies.
-- `cd backend && uv run python -m rag.ingest`: build the local RAG index; add `--rebuild` after document edits.
-- `cd backend && uv run uvicorn main:app --reload --port 8000`: start the API.
-- `cd backend && python -m pytest test_*.py`: run pytest-compatible backend tests.
-- `cd frontend && npm install`: install dependencies.
-- `cd frontend && npm run dev`: start Vite on `http://localhost:5173`.
-- `cd frontend && npm run build`: type-check and build assets.
-- `cd frontend && npm run lint`: run ESLint.
-- `cd frontend && node test_pw.cjs`: run the Playwright smoke check.
+- `cd backend && uv sync`: install Python 3.13 dependencies from `uv.lock`.
+- `cd backend && uv run python -m rag.ingest`: build the RAG index; add `--rebuild` after document changes.
+- `cd backend && uv run uvicorn main:app --reload --port 8000`: run the API locally.
+- `cd backend && uv run python -m unittest test_llm.py test_vision.py test_main_config.py test_observability.py test_evals.py`: run deterministic backend tests.
+- `cd frontend && npm install`: install frontend dependencies.
+- `cd frontend && npm run dev`: start Vite at `http://localhost:5173`.
+- `cd frontend && npm run lint && npm run build`: lint, type-check, and build.
+- `cd frontend && node test_pw.cjs`: run the Playwright smoke flow with the app available.
 
 ## Coding Style & Naming Conventions
 
-Use 4-space indentation and type hints for Python. Keep agent modules named by role, such as `clinic.py` or `pharmacy.py`. Add skills as `backend/skills/<skill_name>/SKILL.md`, `skill.py`, and `__init__.py`. Use Pydantic models for schemas.
+Use 4-space indentation, type hints, and Pydantic models in Python. Name agents by role (`clinic.py`). New skills require `backend/skills/<skill_name>/SKILL.md`, `skill.py`, and `__init__.py`.
 
-Use TypeScript, React function components, and PascalCase filenames such as `ChatCardRenderer.tsx`. Keep shared types in `frontend/src/types/index.ts`, domain UI in matching component folders, and Tailwind/CSS aligned with the mobile-first design.
+Use TypeScript and React function components. Components use PascalCase (`ChatCardRenderer.tsx`); utilities and services use camelCase. Keep SSE payloads synchronized with `frontend/src/types/index.ts`. Follow existing mobile-first styles and run ESLint.
 
 ## Testing Guidelines
 
-Backend tests may require `.env` values such as `ARK_API_KEY`. Prefer pytest-compatible `test_*.py` files for deterministic logic, and keep manual async checks executable with `python test_name.py`. For frontend changes, run `npm run lint` and `npm run build`; add Playwright checks for UI flow changes.
+Add deterministic tests for validation, routing helpers, and transformations. Manual scripts such as `test_router.py` call configured LLMs and require provider credentials such as `ARK_API_KEY` or `OPENAI_API_KEY`; run them explicitly with `uv run python test_router.py`. For UI changes, verify a mobile viewport and extend Playwright coverage where practical.
 
 ## Commit & Pull Request Guidelines
 
-Recent history uses prefixes like `docs:`, `refactor:`, and `fix`, with occasional Chinese summaries. Keep commits focused and name the area. Pull requests should include the change, commands run, linked issues, and screenshots or recordings for visible mobile UI changes.
+Keep commits focused. History mixes Chinese summaries with prefixes such as `docs:` and `refactor:`; prefer `<type>: <area and outcome>`. Pull requests should describe behavior, list verification commands, link issues, and include screenshots or recordings for mobile UI changes.
 
 ## Security & Configuration Tips
 
-Do not commit `.env`, API keys, generated vector stores such as `backend/rag/chroma_db/`, virtual environments, or frontend build output. Keep CORS and service URLs aligned with local dev ports.
+Never commit `.env`, API keys, virtual environments, frontend build output, or generated stores such as `backend/rag/chroma_db/`. Avoid logging raw medical images or personal health information. Keep frontend service URLs and backend CORS origins aligned with ports `5173` and `8000`.

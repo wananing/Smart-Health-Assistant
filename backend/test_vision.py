@@ -1,10 +1,15 @@
+import asyncio
+import os
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from agents.vision import (
     VisionInputError,
     build_vision_prompt,
     compose_agent_message,
     normalize_scan_type,
+    recognize_image,
     redact_sensitive_text,
     validate_image_upload,
 )
@@ -61,6 +66,43 @@ class VisionAdapterTests(unittest.TestCase):
 
         self.assertIn("用户上传了一张药盒图片", message)
         self.assertIn("禁忌", message)
+
+    def test_agent_message_uses_a_provider_neutral_vision_label(self):
+        message = compose_agent_message("report", "白细胞：11.2")
+
+        self.assertIn("视觉模型识别结果", message)
+        self.assertNotIn("火山视觉模型", message)
+
+    def test_recognize_image_uses_the_selected_compatible_provider(self):
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="药品名称：布洛芬"))]
+        )
+        create = AsyncMock(return_value=response)
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        env = {
+            "LLM_PROVIDER": "custom",
+            "LLM_API_KEY": "custom-secret",
+            "LLM_MODEL": "text-model",
+            "LLM_BASE_URL": "https://llm.example.com/v1",
+            "VISION_MODEL": "vision-model",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            with patch("openai.AsyncOpenAI", return_value=client) as client_class:
+                result = asyncio.run(
+                    recognize_image(b"valid-image", "image/jpeg", "drug_box")
+                )
+
+        client_class.assert_called_once_with(
+            api_key="custom-secret",
+            base_url="https://llm.example.com/v1",
+        )
+        request = create.await_args.kwargs
+        self.assertEqual(request["model"], "vision-model")
+        self.assertNotIn("extra_body", request)
+        self.assertEqual(result, "药品名称：布洛芬")
 
 
 if __name__ == "__main__":
