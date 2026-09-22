@@ -7,6 +7,7 @@ import asyncio
 from dataclasses import replace
 import os
 from pathlib import Path
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
@@ -42,11 +43,14 @@ async def _execute_case(case: EvalCase):
         "next_agent": "",
         "active_agent": MODE_TO_AGENT.get(case.chat_mode, "advisor_agent"),
     }
+    # The graph is compiled with a checkpointer; give every case its own thread
+    # so no state leaks between cases or between runs.
+    config = {"configurable": {"thread_id": f"eval-{case.id}-{uuid4().hex}"}}
     with using_attributes(
         session_id=f"eval:{case.id}",
         tags=["evaluation"],
     ):
-        return await master_app.ainvoke(initial_state)
+        return await master_app.ainvoke(initial_state, config=config)
 
 
 async def run_dataset(
