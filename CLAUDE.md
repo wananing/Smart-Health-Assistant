@@ -17,13 +17,19 @@ cp .env.example .env                             # then set LLM_PROVIDER + the m
 uv run python -m rag.ingest                      # first run: build the RAG vector store (~90MB model download)
 uv run python -m rag.ingest --rebuild            # after editing rag/documents/*.md
 uv run uvicorn main:app --reload --port 8000     # dev server
+
+# Regenerate the graph diagram after changing the graph shape
+uv run python -c "from agents.graph import master_app; print(master_app.get_graph(xray=1).draw_mermaid())" > ../docs/images/graph.mmd
 ```
+
+Server-side conversation memory is on by default (`CHECKPOINTER=memory`). Set `CHECKPOINTER=sqlite` (+ optional `CHECKPOINT_DB_PATH`, default `checkpoints.sqlite`, gitignored) to survive restarts. Details: `docs/langgraph-runtime.md`.
 
 Tests are split into two kinds. Keep them separate when running or adding tests:
 
 ```bash
 # Deterministic unit tests (unittest, no network, no API key). pytest also works.
 uv run python -m unittest test_llm.py test_vision.py test_main_config.py test_observability.py test_evals.py
+uv run python -m unittest test_clinic_graph.py test_graph_build.py   # clinic subgraph + checkpointer wiring
 uv run python -m unittest test_llm.py                                  # one file
 uv run python -m unittest test_llm.ModelSettingsTests.test_legacy_ark_configuration_remains_the_default  # one test
 
@@ -66,13 +72,13 @@ docker compose -f compose.observability.yml up -d   # Jaeger UI on http://localh
 
 ### Request lifecycle (the part that spans several files)
 
-The graph is **stateless per request**. There is no checkpointer. The frontend sends the full message history plus a `chat_mode` on every call, and the backend derives everything from that:
+The master graph is compiled **with a checkpointer** (`agents/checkpointing.py`), so conversations can be continued server-side by `thread_id`. The frontend still sends `chat_mode` on every call:
 
-1. `POST /api/chat` (`backend/main.py`) maps `chat_mode` → `active_agent` via `_MODE_TO_AGENT`, keeps the last 10 messages, and builds `MainAgentState` (`agents/state.py`: `messages`, `user_info`, `next_agent`, `active_agent`).
+1. `POST /api/chat` (`backend/main.py`) maps `chat_mode` → `active_agent` via `_MODE_TO_AGENT` and builds `MainAgentState` (`agents/state.py`: `messages`, `user_info`, `next_agent`, `active_agent`). The request may carry an optional `thread_id`; the stream always opens with a `{"type": "session", "thread_id": …}` event. `_resolve_graph_input` then picks the input: a pending `interrupt` on that thread → `Command(resume=<user text>)`; a known thread → only the newest message (the checkpointer holds the history); an unknown or absent thread → the full history from the request (backward compatible).
 2. `router_node` (`agents/router.py`): if the text contains an exit phrase (退出/结束/不看了/取消…) it resets to `advisor_agent`; else if `active_agent` is already a specialist it short-circuits without calling the LLM; else it runs a temperature-0 classifier and matches the agent id by substring.
 3. `agents/graph.py` wires `START → router → <one specialist node> → END`. `master_app` is compiled at import time; `main.py` imports it lazily on first request.
-4. Each specialist node builds a `create_react_agent` on the fly with its tools and skills, injects user info (and RAG context for clinic/report/advisor) into the system prompt, runs it, and returns only the newly appended messages.
-5. `_stream_agent_events` in `main.py` translates `astream_events(version="v2")` into SSE events: `text`, `node_start`/`node_end` (only for nodes listed in `_NODE_LABELS`), `tool_start`/`tool_end` (labels from `_SKILL_LABELS`), `card`, `finish`, `error`.
+4. `insurance_node`, `report_node`, `pharmacy_node`, `advisor_node` each build a `create_react_agent` on the fly with their tools and skills, inject user info (and RAG context) into the system prompt, run it, and return only the newly appended messages. `clinic_node` is different: it is a **compiled subgraph** (`agents/clinic.py`) with its own `ClinicState` — a code-level `emergency_gate` (pure rule matching, no LLM), structured symptom extraction, a deterministic sufficiency check, `interrupt()`-based follow-up questions, and a `conclude` node that streams a `clinic_recommendation` card. It still returns `{"messages": new_messages}` to the parent. See `docs/langgraph-runtime.md`.
+5. `_stream_agent_events` in `main.py` translates `astream_events(version="v2", stream_mode=["updates", "custom"], subgraphs=True)` into SSE events: `text`, `node_start`/`node_end` (only for nodes listed in `_NODE_LABELS`), `tool_start`/`tool_end` (labels from `_SKILL_LABELS`), `card`, `finish`, `error`, plus `session` and `interrupt`. Root-level `custom` chunks pushed by a node via `get_stream_writer()` are forwarded verbatim when their `type` is `card` or `text`; `__interrupt__` updates are surfaced as a `text` event carrying the follow-up question followed by an `interrupt` marker.
 6. The frontend (`services/chatService.ts`) flips `chatMode` when it sees a `node_start` for a specialist node (`NODE_TO_CHAT_MODE`), which is how "mode lock" persists across turns: the next request carries the new `chat_mode`. An `advisor_node` start signals exit back to `general`.
 
 `POST /api/vision-chat` (multipart: `file`, `scan_type` ∈ `report|drug_box|trace_code`, JSON-string `user_info`/`messages`) runs `agents/vision.py` first: validates MIME/size (JPEG/PNG/WebP, ≤8MB), calls the vision model, redacts PII from the result, wraps it as a *user* message (never a system prompt), then feeds the same `_stream_agent_events` pipeline with `active_agent` forced to report or pharmacy. It emits a `tool_start`/`tool_end` for `vision_model` before the graph events.
@@ -84,7 +90,7 @@ A `card` SSE event is emitted in `main.py` on `on_tool_end` when the tool name a
 - `main.py`: `_INSURANCE_TOOL_TO_CARD_TYPE` (4 insurance tools) and `_REPORT_TOOL_TO_CARD_TYPE` (`lab_interpreter` → `report_analysis`)
 - `agents/pharmacy.py`: `PHARMACY_TOOL_TO_CARD_TYPE` (`search_drug_info` → `medication_task`, `find_nearby_pharmacy` → `hospital_list`)
 
-The tool's return value must be a JSON string; it becomes `payload.data`. Some `ChatCardPayload` variants (`mode_welcome`, `mode_exit`, `sensitive_image_preview`, `clinic_recommendation`) are created frontend-side only. To add a backend-driven card: return JSON from the tool, add the tool → type mapping, add the variant to `ChatCardPayload` in `frontend/src/types/index.ts`, add a `case` in `components/chat/ChatCardRenderer.tsx`. Add a display label in `_SKILL_LABELS` too or the status bubble shows a raw tool name.
+The tool's return value must be a JSON string; it becomes `payload.data`. `mode_welcome`, `mode_exit` and `sensitive_image_preview` are created frontend-side only. `clinic_recommendation` comes from the clinic subgraph over the `custom` stream instead of a tool mapping — prefer that route for new cards rather than adding more tool-name sniffing. To add a backend-driven card: return JSON from the tool, add the tool → type mapping, add the variant to `ChatCardPayload` in `frontend/src/types/index.ts`, add a `case` in `components/chat/ChatCardRenderer.tsx`. Add a display label in `_SKILL_LABELS` too or the status bubble shows a raw tool name.
 
 ### Model configuration (`agents/llm.py`)
 
@@ -92,7 +98,7 @@ All providers are OpenAI-compatible and selected by `LLM_PROVIDER` (`ark` defaul
 
 ### Frontend state
 
-`store/GlobalContext.tsx` (`useGlobalStore`) owns `chatMode`, `messages`, `isElderMode`, scanner state, and `enterChatMode()`/`exitChatMode()`, which insert the `mode_welcome`/`mode_exit` cards. `screens/` are full-page views per mode; `HomeScreen` hosts the chat (`GlobalChatView` → `AgentStatusBubble` + `ChatCardRenderer`, `InputBar`). The backend URL `http://localhost:8000` is hardcoded in `chatService.ts`; backend CORS allows only `localhost:5173` and `5174`.
+`store/GlobalContext.tsx` (`useGlobalStore`) owns `chatMode`, `messages`, `isElderMode`, scanner state, `threadId`, and `enterChatMode()`/`exitChatMode()`, which insert the `mode_welcome`/`mode_exit` cards. `threadId` is adopted from the backend `session` event; while it is set, `chatService.ts` sends only the newest message. `exitChatMode()` (and `resetThread()`) clears it, starting a fresh server-side conversation. `screens/` are full-page views per mode; `HomeScreen` hosts the chat (`GlobalChatView` → `AgentStatusBubble` + `ChatCardRenderer`, `InputBar`). The backend URL `http://localhost:8000` is hardcoded in `chatService.ts`; backend CORS allows only `localhost:5173` and `5174`.
 
 ### RAG (`backend/rag/`)
 
