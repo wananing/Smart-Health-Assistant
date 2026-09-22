@@ -20,6 +20,31 @@ ROUTER_SYSTEM_PROMPT = """你是一个大健康 App 中的"智能意图路由器
 
 只回复分类 ID 字符串，不要任何其他内容。"""
 
+# Phrases that always take the user back to the general advisor, whatever the
+# current active_agent is. Also used by main.py to abandon a clinic follow-up
+# that is waiting on an interrupt.
+EXIT_PHRASES = frozenset(
+    {
+        "退出",
+        "结束",
+        "结束问诊",
+        "不看了",
+        "不用了",
+        "我要退出",
+        "取消",
+        "退出诊室",
+        "退出模式",
+        "退出功能",
+    }
+)
+
+
+def is_exit_request(text: str) -> bool:
+    """True when the user asked to leave the current specialized mode."""
+    stripped = text.strip()
+    return any(phrase in stripped for phrase in EXIT_PHRASES)
+
+
 
 async def router_node(state: MainAgentState) -> dict:
     """
@@ -43,9 +68,7 @@ async def router_node(state: MainAgentState) -> dict:
     
     # Check if the user is explicitly asking to exit the current mode.
     # These phrases take highest priority over any active_agent lock.
-    EXIT_PHRASES = {"退出", "结束", "结束问诊", "不看了", "不用了", "我要退出", "取消", "退出诊室", "退出模式", "退出功能"}
-    user_text_stripped = user_text.strip()
-    if any(phrase in user_text_stripped for phrase in EXIT_PHRASES):
+    if is_exit_request(user_text):
         print("--- [Router] User requested exit, routing back to advisor_agent ---", flush=True)
         return {"next_agent": "advisor_agent", "active_agent": "advisor_agent"}
     
