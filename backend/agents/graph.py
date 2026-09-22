@@ -2,9 +2,15 @@
 Main LangGraph StateGraph assembler.
 
 Wires together all agent nodes into the master graph:
-  START -> router -> (clinic | insurance | report | advisor) -> END
+  START -> router -> (clinic | insurance | report | pharmacy | advisor) -> END
+
+`clinic_node` is not a plain function but a compiled subgraph with its own
+state machine (see agents/clinic.py). The master graph is compiled with a
+checkpointer so conversations can be continued by `thread_id` and so the
+clinic subgraph can suspend on `interrupt()` and resume later.
 """
 from langgraph.graph import StateGraph, START, END
+from agents.checkpointing import create_checkpointer
 from agents.state import MainAgentState
 from agents.router import router_node
 from agents.clinic import clinic_node
@@ -31,7 +37,8 @@ def _route_to_agent(state: MainAgentState) -> str:
 
 
 # --- Build the graph ---
-def build_graph() -> StateGraph:
+def build_graph(checkpointer=None):
+    """Compile the master graph. Pass `checkpointer` to override the env default."""
     workflow = StateGraph(MainAgentState)
 
     # 1. Register all nodes
@@ -65,7 +72,7 @@ def build_graph() -> StateGraph:
     workflow.add_edge("advisor_node", END)
     workflow.add_edge("pharmacy_node", END)
 
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer or create_checkpointer())
 
 
 # Singleton compiled graph instance used by main.py
