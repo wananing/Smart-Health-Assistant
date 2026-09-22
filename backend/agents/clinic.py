@@ -43,13 +43,16 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 
+from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.llm import get_chat_llm
 from rag.knowledge_base import get_knowledge_base
 from skills import get_agent_tools, load_skill
 from skills.emergency_triage.skill import EmergencyTriageSkill
+
+AGENT_ID = "clinic_agent"
 
 CLINIC_SYSTEM_PROMPT = """你是大健康App中的"AI预问诊助手"，态度温和、专业。
 
@@ -175,6 +178,9 @@ class ClinicState(TypedDict, total=False):
 
     messages: Annotated[Sequence[BaseMessage], _replace]
     user_info: dict
+    # Mirrored from MainAgentState so conclude() can respect the per-turn
+    # handoff budget before escaping to the parent graph.
+    handoff_count: int
     # Messages produced inside this turn (follow-up Q&A + final triage answer).
     turn_messages: Annotated[list[BaseMessage], operator.add]
     # Symptom facts merged across extraction rounds.
@@ -463,19 +469,33 @@ async def _summarize_recommendation(triage_text: str, state: ClinicState) -> dic
     return result if isinstance(result, dict) else {}
 
 
-async def conclude(state: ClinicState) -> dict:
-    """ReAct triage answer + structured ``clinic_recommendation`` card."""
-    system = await _build_system_prompt(state)
+async def conclude(state: ClinicState) -> Command | dict:
+    """
+    ReAct triage answer + structured ``clinic_recommendation`` card.
+
+    Clinic is a mounted subgraph, so a handoff here leaves through
+    ``Command(graph=Command.PARENT, ...)`` rather than a plain node ``Command``.
+    """
+    system = await _build_system_prompt(state) + handoff_prompt_section(AGENT_ID)
     skill_tools = get_agent_tools(tags=["clinic"])
     agent = create_react_agent(
         get_chat_llm("balanced"),
-        tools=[load_skill, *skill_tools],
+        tools=[load_skill, *skill_tools, *get_handoff_tools(AGENT_ID)],
         prompt=SystemMessage(content=system),
     )
 
     transcript = _transcript(state)
     sub_result = await agent.ainvoke({"messages": transcript})
     produced = list(sub_result["messages"][len(transcript):])
+
+    handoff = apply_handoff(
+        state,
+        produced,
+        parent=True,
+        prefix_messages=state.get("turn_messages", []),
+    )
+    if isinstance(handoff, Command):
+        return handoff
 
     triage_text = next(
         (

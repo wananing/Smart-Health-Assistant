@@ -12,16 +12,36 @@ graph TD;
 	pharmacy_node(pharmacy_node)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> router;
+	advisor_node -.-> __end__;
+	advisor_node -.-> clinic_node\3aemergency_gate;
+	advisor_node -.-> insurance_node;
+	advisor_node -.-> pharmacy_node;
+	advisor_node -.-> report_node;
+	clinic_node\3a__end__ -.-> __end__;
+	clinic_node\3a__end__ -.-> advisor_node;
+	clinic_node\3a__end__ -.-> insurance_node;
+	clinic_node\3a__end__ -.-> pharmacy_node;
+	clinic_node\3a__end__ -.-> report_node;
+	insurance_node -.-> __end__;
+	insurance_node -.-> advisor_node;
+	insurance_node -.-> clinic_node\3aemergency_gate;
+	insurance_node -.-> pharmacy_node;
+	insurance_node -.-> report_node;
+	pharmacy_node -.-> __end__;
+	pharmacy_node -.-> advisor_node;
+	pharmacy_node -.-> clinic_node\3aemergency_gate;
+	pharmacy_node -.-> insurance_node;
+	pharmacy_node -.-> report_node;
+	report_node -.-> __end__;
+	report_node -.-> advisor_node;
+	report_node -.-> clinic_node\3aemergency_gate;
+	report_node -.-> insurance_node;
+	report_node -.-> pharmacy_node;
 	router -.-> advisor_node;
 	router -.-> clinic_node\3aemergency_gate;
 	router -.-> insurance_node;
 	router -.-> pharmacy_node;
 	router -.-> report_node;
-	advisor_node --> __end__;
-	clinic_node\3a__end__ --> __end__;
-	insurance_node --> __end__;
-	pharmacy_node --> __end__;
-	report_node --> __end__;
 	subgraph clinic_node
 	clinic_node\3aemergency_gate(emergency_gate)
 	clinic_node\3aextract_symptoms(extract_symptoms)
@@ -42,3 +62,4 @@ graph TD;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
+

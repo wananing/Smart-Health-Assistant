@@ -10,6 +10,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
+from agents.handoff import HANDOFF_TOOL_LABELS
 from agents.insurance import INSURANCE_CARD_TOOLS
 from agents.llm import LLMConfigurationError, resolve_model_settings
 from agents.pharmacy import PHARMACY_TOOL_TO_CARD_TYPE
@@ -113,6 +114,8 @@ _SKILL_LABELS: dict[str, str] = {
     "lab_interpreter":          "正在解读化验指标…",
     "risk_assessor":            "正在评估慢性病风险…",
     "medication_calculator":    "正在计算用药剂量…",
+    # agent-to-agent handoffs
+    **HANDOFF_TOOL_LABELS,
 }
 
 # --- 医保工具 → 前端卡片 payload type 映射 ---
@@ -184,6 +187,7 @@ def _build_initial_state(
         "user_info": user_info_dict,
         "next_agent": "",
         "active_agent": active_agent,
+        "handoff_count": 0,
     }
 
 

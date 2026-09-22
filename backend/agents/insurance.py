@@ -6,12 +6,17 @@ Uses a ReAct sub-agent with four mock tools:
   2. get_consumption_records    - 查医保消费明细
   3. get_payment_records        - 查缴费记录
   4. get_cross_region_info      - 异地就医信息
+
+The agent also carries the `transfer_to_*` handoff tools, letting it release an
+off-topic question to another specialist.
 """
 import json
 from datetime import date
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command
+from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
 from rag.knowledge_base import get_knowledge_base
@@ -161,6 +166,8 @@ INSURANCE_SYSTEM_PROMPT = """你是一个专业的医保政策咨询助手，熟
 【回答格式】
 工具调用完成后，简洁总结关键数据（1-3句）。数字已由卡片展示，不用大量复述数字。"""
 
+AGENT_ID = "insurance_agent"
+
 _INSURANCE_TOOLS = [
     get_insurance_balance,
     get_consumption_records,
@@ -173,19 +180,21 @@ _INSURANCE_TOOLS = [
 INSURANCE_CARD_TOOLS = {t.name for t in _INSURANCE_TOOLS}
 
 
-def _build_insurance_agent(llm):
-    """Build a ReAct sub-agent scoped to insurance tools."""
+def _build_insurance_agent(llm, extra_context: str = ""):
+    """Build a ReAct sub-agent scoped to insurance tools plus the handoff tools."""
+    prompt = INSURANCE_SYSTEM_PROMPT + extra_context + handoff_prompt_section(AGENT_ID)
     return create_react_agent(
         llm,
-        tools=_INSURANCE_TOOLS,
-        prompt=SystemMessage(content=INSURANCE_SYSTEM_PROMPT),
+        tools=[*_INSURANCE_TOOLS, *get_handoff_tools(AGENT_ID)],
+        prompt=SystemMessage(content=prompt),
     )
 
 
-async def insurance_node(state: MainAgentState) -> dict:
+async def insurance_node(state: MainAgentState) -> Command | dict:
     """
     Insurance agent: uses a ReAct sub-agent to call insurance tools and answer queries.
-    Extracts messages from the sub-graph result to be compatible with MainAgentState.
+    Extracts messages from the sub-graph result to be compatible with MainAgentState,
+    or returns a ``Command`` when the sub-agent handed the turn to another specialist.
     """
     llm = get_chat_llm("balanced")
     user_info = state.get("user_info", {})
@@ -198,19 +207,10 @@ async def insurance_node(state: MainAgentState) -> dict:
     if elder_mode:
         extra_context += "\n请使用通俗易懂的语言，避免复杂的政策术语。"
 
-    # Dynamically patch the system prompt if we have user context
-    if extra_context:
-        patched_tools = _INSURANCE_TOOLS
-        agent = create_react_agent(
-            llm,
-            tools=patched_tools,
-            prompt=SystemMessage(content=INSURANCE_SYSTEM_PROMPT + extra_context),
-        )
-    else:
-        agent = _build_insurance_agent(llm)
+    agent = _build_insurance_agent(llm, extra_context)
 
     sub_result = await agent.ainvoke({"messages": state["messages"]})
     # Extract only the new messages (all except the original input messages)
     original_count = len(state["messages"])
     new_messages = sub_result["messages"][original_count:]
-    return {"messages": new_messages}
+    return apply_handoff(state, new_messages)

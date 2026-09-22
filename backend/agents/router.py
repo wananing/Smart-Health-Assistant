@@ -28,6 +28,7 @@ EXIT_PHRASES = frozenset(
         "退出",
         "结束",
         "结束问诊",
+        "退出问诊",
         "不看了",
         "不用了",
         "我要退出",
@@ -38,18 +39,51 @@ EXIT_PHRASES = frozenset(
     }
 )
 
+# Characters that may sit around an exit phrase without changing its meaning.
+# They double as the "word boundary" a phrase must be followed by, which is
+# what keeps 取消 inside 我想取消明天的预约 from ending the conversation.
+_EXIT_BOUNDARY = " \t　，,。.！!？?；;、~～…·"
+
 
 def is_exit_request(text: str) -> bool:
-    """True when the user asked to leave the current specialized mode."""
-    stripped = text.strip()
-    return any(phrase in stripped for phrase in EXIT_PHRASES)
+    """
+    True when the user asked to leave the current specialized mode.
+
+    Matching is deliberately anchored rather than a free substring search:
+
+    1. Whitespace and surrounding punctuation are stripped.
+    2. The result must either **be** an exit phrase exactly …
+    3. … or **start** with one that is immediately followed by punctuation or
+       whitespace (``不用了，谢谢``).
+
+    Anything else is ordinary prose, so ``我想取消明天的预约``、``这个药不用了吗``
+    and ``结束以后要复查吗`` stay inside the current specialist.
+    """
+    normalized = text.strip().strip(_EXIT_BOUNDARY)
+    if not normalized:
+        return False
+    if normalized in EXIT_PHRASES:
+        return True
+    for phrase in EXIT_PHRASES:
+        if not normalized.startswith(phrase):
+            continue
+        remainder = normalized[len(phrase):]
+        if remainder and remainder[0] in _EXIT_BOUNDARY:
+            return True
+    return False
 
 
 
 async def router_node(state: MainAgentState) -> dict:
     """
     Classifies the user's latest message and sets next_agent in state.
-    Respects 'active_agent' short-circuiting to persist multi-turn context.
+    Respects 'active_agent' short-circuiting to persist multi-turn context;
+    a specialist that receives an off-topic question escapes the lock by
+    calling one of the handoff tools (see agents/handoff.py) rather than by
+    waiting for the user to type an exit phrase.
+
+    Every return path resets 'handoff_count', which is what makes the handoff
+    budget per-turn instead of per-conversation.
     """
     print("--- [Router] Entering router_node ---", flush=True)
     
@@ -70,11 +104,15 @@ async def router_node(state: MainAgentState) -> dict:
     # These phrases take highest priority over any active_agent lock.
     if is_exit_request(user_text):
         print("--- [Router] User requested exit, routing back to advisor_agent ---", flush=True)
-        return {"next_agent": "advisor_agent", "active_agent": "advisor_agent"}
+        return {
+            "next_agent": "advisor_agent",
+            "active_agent": "advisor_agent",
+            "handoff_count": 0,
+        }
     
     if active_agent and active_agent not in ("advisor_agent", ""):
         print(f"--- [Router] Short-circuit: already in {active_agent}, bypassing LLM classification ---", flush=True)
-        return {"next_agent": active_agent}
+        return {"next_agent": active_agent, "handoff_count": 0}
 
     # 3. Normal LLM Intent Classification
     llm = get_chat_llm("router", streaming=False)
@@ -113,5 +151,6 @@ async def router_node(state: MainAgentState) -> dict:
     # Store the decision in active_agent so subsequent turns persist
     return {
         "next_agent": next_agent,
-        "active_agent": next_agent
+        "active_agent": next_agent,
+        "handoff_count": 0,
     }

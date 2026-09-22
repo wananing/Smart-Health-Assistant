@@ -24,3 +24,8 @@ class MainAgentState(TypedDict):
     # Persistent tracking of the current focused agent to handle multi-turn conversations
     # If set, the router should bypass standard classification and route back here.
     active_agent: str
+
+    # How many Command-based handoffs have already been honoured this turn.
+    # Reset to 0 by router_node and capped by handoff.MAX_HANDOFFS_PER_TURN so
+    # two specialists cannot transfer the same message back and forth forever.
+    handoff_count: int

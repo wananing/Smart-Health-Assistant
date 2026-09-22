@@ -8,10 +8,15 @@ Uses a simple RAG-style flow:
 """
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command
+from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
 from rag.knowledge_base import get_knowledge_base
 from skills import get_agent_tools, load_skill
+
+
+AGENT_ID = "advisor_agent"
 
 
 def _build_system_prompt(user_info: dict) -> str:
@@ -36,13 +41,14 @@ def _build_system_prompt(user_info: dict) -> str:
 【可用技能工具】
 - health_calculator：当用户询问BMI、理想体重、每日热量需求时调用
 - risk_assessor：当用户想评估心血管或糖尿病风险时调用
-- load_skill：通用技能加载器，可按名称调用任意已注册技能"""
+- load_skill：通用技能加载器，可按名称调用任意已注册技能""" + handoff_prompt_section(AGENT_ID)
 
 
-async def advisor_node(state: MainAgentState) -> dict:
+async def advisor_node(state: MainAgentState) -> Command | dict:
     """
     Advisor agent: general health Q&A with RAG context + advisor-tagged skills
-    (health_calculator, risk_assessor) loaded as ReAct tools.
+    (health_calculator, risk_assessor) loaded as ReAct tools. Returns a
+    ``Command`` when the sub-agent transferred the turn to a specialist.
     """
     llm = get_chat_llm("fast")
     user_info = state.get("user_info", {})
@@ -64,10 +70,10 @@ async def advisor_node(state: MainAgentState) -> dict:
 
     agent = create_react_agent(
         llm,
-        tools=[load_skill, *skill_tools],
+        tools=[load_skill, *skill_tools, *get_handoff_tools(AGENT_ID)],
         prompt=SystemMessage(content=system_prompt),
     )
     sub_result = await agent.ainvoke({"messages": state["messages"]})
     original_count = len(state["messages"])
     new_messages = sub_result["messages"][original_count:]
-    return {"messages": new_messages}
+    return apply_handoff(state, new_messages)

@@ -10,10 +10,15 @@ Business Flow:
 """
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command
+from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
 from rag.knowledge_base import get_knowledge_base
 from skills import get_agent_tools, load_skill
+
+
+AGENT_ID = "report_agent"
 
 
 REPORT_SYSTEM_PROMPT = """你是一位专业的检验报告解读助手。用户会向你描述或粘贴化验单数据，你需要：
@@ -39,10 +44,11 @@ REPORT_SYSTEM_PROMPT = """你是一位专业的检验报告解读助手。用户
 - 保持客观严谨，不夸大也不轻描淡写"""
 
 
-async def report_node(state: MainAgentState) -> dict:
+async def report_node(state: MainAgentState) -> Command | dict:
     """
     Report agent: interprets lab reports using the lab_interpreter skill for
-    structured abnormality detection, plus RAG for clinical context.
+    structured abnormality detection, plus RAG for clinical context. Returns a
+    ``Command`` when the sub-agent transferred the turn to another specialist.
     """
     llm = get_chat_llm("precise")
     user_info = state.get("user_info", {})
@@ -55,7 +61,7 @@ async def report_node(state: MainAgentState) -> dict:
     if elder_mode:
         extra += "\n请使用简单易懂的语言，避免复杂的医学术语。"
 
-    system = REPORT_SYSTEM_PROMPT + extra
+    system = REPORT_SYSTEM_PROMPT + extra + handoff_prompt_section(AGENT_ID)
 
     last_user_msg = next(
         (m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
@@ -72,10 +78,10 @@ async def report_node(state: MainAgentState) -> dict:
 
     agent = create_react_agent(
         llm,
-        tools=[load_skill, *skill_tools],
+        tools=[load_skill, *skill_tools, *get_handoff_tools(AGENT_ID)],
         prompt=SystemMessage(content=system),
     )
     sub_result = await agent.ainvoke({"messages": state["messages"]})
     original_count = len(state["messages"])
-    new_messages = sub_result["messages"][original_count:]
-    return {"messages": new_messages}
+    new_messages = list(sub_result["messages"][original_count:])
+    return apply_handoff(state, new_messages)
