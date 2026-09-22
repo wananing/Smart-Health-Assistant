@@ -1,3 +1,5 @@
+[English](README.en.md) | **简体中文**
+
 # 🏥 大健康智能助手 (Smart Health Assistant)
 
 > 🚀 **开源版 医疗/医保 多智能体对话系统** —— 对标国内头部平台（如蚂蚁阿福、支付宝健康管家等）的 AI 健康助手落地架构。
@@ -8,6 +10,7 @@
 - 新增支持 **RAG 知识库增强**，包括常见疾病、医保政策、检验参考范围、药品用药指南等。 详见 [docs/rag.md](docs/rag.md)
 - 新增支持 **Agent Skills System**，每个智能体均可动态加载**模块化领域技能**，无需修改 Agent 代码即可扩展能力。 详见 [docs/skills.md](docs/skills.md)
 - 支持 **开源可观测与评估**：OpenTelemetry/OpenInference 链路、Jaeger 本地后端与 DeepEval 回归评估。详见 [docs/observability-evals.md](docs/observability-evals.md)
+- v2.1 新增 **服务端会话、预问诊子图与 Agent 转接**：Checkpointer + `thread_id`、代码级急症闸门、`interrupt()` 追问、专科之间的 `Command` handoff。详见 [docs/langgraph-runtime.md](docs/langgraph-runtime.md) 与 [CHANGELOG.md](CHANGELOG.md)
 
 
 
@@ -47,6 +50,11 @@
   - **支持健康问答** (Advisor Agent)：通用的医学科普与生活建议。
   - **支持药管家与报告解读**：提供药品信息、相互作用查询、拍照问药，以及检查报告图片和检验指标解读。
 
+- **🔁 服务端会话与 Agent 转接 (Checkpointer + Handoff)**:
+  - 主图携带 LangGraph Checkpointer（memory / sqlite），会话按 `thread_id` 持久化，前端每轮只发最新一条消息。
+  - 预问诊是独立子图：代码级急症闸门先于任何模型调用；信息不足时用 `interrupt()` 挂起追问，用户回复后从断点恢复，最终产出带科室与紧急度的结构化建议卡片。
+  - 专科之间支持 swarm 式转接：在医保模式里描述症状，医保智能体会通过 `transfer_to_clinic` 把这一轮直接交给预问诊，不再需要用户先说“退出”。
+
 - **⚡ 丝滑的 UI 端到端体验 (SSE + Server-Driven UI)**:
   - **后端接管 UI 渲染**：工具调用完成后，后端不仅返回文字总结，还通过 SSE 下发 `{"type": "card", "payload": ...}` 事件。
   - **前端动态呈现**：前端接收到事件后，实时在聊天气泡上下文中渲染出高颜值的定制卡片（如：带渐变背景、防窥探交互的医保卡片）。
@@ -76,12 +84,16 @@
 
 ## 🏗️ 系统架构
 
-项目的核心在于 **“状态路由 + 工具卡片双向绑定”**：
+项目的核心在于 **“状态路由 + Agent 转接 + 工具卡片双向绑定”**：
 
-1. **Agent State**: `messages`, `active_agent`, `userInfo`。
-2. **Router Node**: 识别用户意图，如果已经处于特定 Agent 的会话中，则“锁定”上下文直到用户主动退出（发送“结束/不看了”）。
-3. **Event Stream**: 后端使用异步 Generator 透传 LangGraph 的内部运行状态（`node_start`, `tool_start`, `tool_end`, `card`）。前端依据流事件展示 **Agent 执行状态与工具调用进度**。
-4. **Lifecycle**: 通过仓库内评估集复现问题、使用 OTLP Trace 定位节点，再以相同 case 验证迭代结果。
+1. **Agent State**: `messages`、`active_agent`、`user_info`、`handoff_count`；主图编译时携带 checkpointer，会话状态按 `thread_id` 持久化在服务端，前端后续只需发送最新一条消息。
+2. **Router Node**: 识别用户意图并“锁定”专科上下文。退出词为锚定匹配（整句等于退出词，或以退出词开头且紧跟标点），`我想取消明天的预约` 这类正常语句不会误退出。
+3. **Agent Handoff**: 每个专科都持有指向其余四个专科的 `transfer_to_*` 工具。跑错专科时，节点返回 `Command(goto=...)`（预问诊子图用 `Command(graph=Command.PARENT, ...)`），主图在**同一轮**里把这条消息交给正确的专科；每轮最多转接一次，防止来回弹球。
+4. **Clinic 子图**: 预问诊是一张拥有独立状态的编译子图——代码级急症闸门（纯规则、不依赖模型是否调用工具）、结构化症状抽取、确定性充分度判断、基于 `interrupt()` 的追问与恢复。
+5. **Event Stream**: 后端透传 LangGraph 的运行状态（`session`、`node_start`、`tool_start`、`tool_end`、`card`、`interrupt`、`finish`）。卡片由产生它的 Agent 自己推送到 custom 流，API 层不再嗅探任何工具名。
+6. **Lifecycle**: 通过仓库内评估集复现问题、使用 OTLP Trace 定位节点，再以相同 case 验证迭代结果。
+
+完整的图结构见 [docs/images/graph.mmd](docs/images/graph.mmd)，运行时细节见 [docs/langgraph-runtime.md](docs/langgraph-runtime.md)。
 
 ---
 
@@ -178,7 +190,7 @@ uv run --extra eval python -m evals --provider deepeval
 3. 在 `backend/agents/router.py` 的提示词和分类器中，加入对你工具意图的理解定义。
 
 ### 如何增加一个前端 UI 卡片？
-1. 后端调用工具后，在 `main.py` 的 SSE 拦截层，抓取输出并 yield `{ "type": "card", "payload": { "type": "your_card_type", "data": ... } }`。
+1. 后端在产生数据的工具内部调用 `agents/streaming.py` 的 `emit_card("your_card_type", data)`；若该工具是多个 Agent 共用的通用技能，则在对应的 node 里补发（参考 `report_node`）。
 2. 前端 `src/types/index.ts` 中增加 `ChatCardPayload` 联合类型。
 3. 在 `frontend/src/components/chat/ChatCardRenderer.tsx` 中编写你的 React 视图组件即可。
 
@@ -189,12 +201,15 @@ uv run --extra eval python -m evals --provider deepeval
 - [x] 多 Agent 路由调度核心 (LangGraph)
 - [x] 智能预问诊 & 报告科室推荐
 - [x] 基于流式卡片的医保服务面板 (对齐真实业务场景)
-- [x] 上下文环境隔离机制 (进入专科诊室 / 退出诊断)
+- [x] 上下文环境隔离机制 (进入专科诊室 / 退出诊断) + Agent 之间的 `Command` 转接（swarm 式 handoff，跑错专科可同轮纠正）
 - [x] RAG 知识库增强：混合检索（BM25 + 密集向量）+ 可插拔嵌入模型与向量库
 - [x] 药管家 Agent（Pharmacy Agent）：药品查询、药物相互作用、OTC 推荐、附近药店
 - [x] 可插拔技能系统（Agent Skills）：6 项核心技能 + 零配置自发现注册表
 - [x] 多模态图片识别：拍照看报告、拍照问药与药品追溯码识别（可配置兼容模型）
 - [x] Agent 生命周期基础设施：OpenTelemetry/OpenInference 链路、Jaeger 与 DeepEval 回归评估
+- [x] 服务端会话状态：LangGraph Checkpointer + `thread_id`，支持 memory / sqlite 两种后端
+- [x] 预问诊子图：代码级急症闸门、结构化症状抽取与 `interrupt()` 追问恢复
+- [x] 卡片归属权下沉：由各 Agent 自行推送 SSE 卡片，API 层不再维护「工具名 → 卡片类型」映射
 - [ ] 语音交互接入：实时 ASR 与 TTS（流式语音包反馈）
 
 ## 📄 开源协议
