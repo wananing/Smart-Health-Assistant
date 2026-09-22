@@ -346,6 +346,34 @@ class ClinicHandoffTests(_GraphHandoffCase):
         self.assertEqual(result["handoff_count"], 1)
         self.assertEqual(result["messages"][-1].content, "建议到呼吸内科就诊。")
 
+    async def test_the_clinic_subgraph_hands_off_through_the_master_graph(self):
+        clinic_model = _ClinicChatModel(
+            script=[
+                tool_call("transfer_to_pharmacy", {"reason": "用户想买药"}, "c1"),
+                AIMessage(content="为您转接用药助手。"),
+            ],
+            invocations=[],
+            facts=clinic.SymptomFacts(
+                chief_complaint="头痛", duration="一天", severity="轻微"
+            ),
+            recommendation=clinic.TriageRecommendation(
+                department=["神经内科"], urgency="routine"
+            ),
+        )
+        pharmacy = scripted(AIMessage(content="布洛芬成人每次 200-400mg。"))
+
+        with patch("agents.clinic.get_knowledge_base", return_value=FakeKnowledgeBase()):
+            result = await self._run(
+                router_answer="clinic_agent",
+                models={"clinic": clinic_model, "pharmacy": pharmacy},
+                messages=[HumanMessage(content="头痛吃什么药")],
+            )
+
+        self.assertEqual(result["active_agent"], "pharmacy_agent")
+        self.assertEqual(result["handoff_count"], 1)
+        self.assertEqual(result["messages"][-1].content, "布洛芬成人每次 200-400mg。")
+        self.assertFalse(any(handoff_target(m) for m in result["messages"]))
+
     async def test_the_clinic_conclude_node_escapes_to_the_parent_graph(self):
         model = scripted(
             tool_call("transfer_to_pharmacy", {"reason": "用户想买药"}, "c1"),
