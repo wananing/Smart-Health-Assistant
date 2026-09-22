@@ -54,7 +54,7 @@ async def lifespan(_app: FastAPI):
     _observability_runtime.shutdown()
 
 
-app = FastAPI(title="大健康 AI 后端", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="大健康 AI 后端", version="2.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -361,7 +361,7 @@ async def _stream_agent_events(graph_input: Any, config: dict | None = None):
 
 @app.get("/")
 async def root():
-    return {"message": "大健康 AI 后端 v2.0 (LangGraph)"}
+    return {"message": "大健康 AI 后端 v2.1 (LangGraph)"}
 
 
 @app.get("/health")

@@ -1,7 +1,7 @@
 [project]
 name = "backend"
-version = "0.1.0"
-description = "Add your description here"
+version = "2.1.0"
+description = "大健康智能助手后端：FastAPI + LangGraph 多智能体编排、RAG 知识库与 SSE 流式接口"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
