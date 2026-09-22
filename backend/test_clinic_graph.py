@@ -392,6 +392,36 @@ class ThreadResumeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["user_text"], "你好")
 
 
+class CheckpointerShutdownTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        with patch("dotenv.load_dotenv"):
+            import main
+
+        self.main = main
+
+    async def test_memory_checkpointer_has_nothing_to_close(self):
+        with patch.object(self.main, "_master_app", None):
+            await self.main._close_checkpointer()  # must not raise
+
+    async def test_async_connection_is_awaited(self):
+        closed: list[bool] = []
+
+        class _Conn:
+            async def close(self):
+                closed.append(True)
+
+        class _Saver:
+            conn = _Conn()
+
+        class _App:
+            checkpointer = _Saver()
+
+        with patch.object(self.main, "_master_app", _App()):
+            await self.main._close_checkpointer()
+
+        self.assertEqual(closed, [True])
+
+
 class StreamTranslationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         with patch("dotenv.load_dotenv"):

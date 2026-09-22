@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import inspect
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -33,9 +34,24 @@ if _observability_runtime.provider != "none":
     )
 
 
+async def _close_checkpointer() -> None:
+    """Release the checkpointer's backing connection (sqlite) on shutdown."""
+    connection = getattr(getattr(_master_app, "checkpointer", None), "conn", None)
+    close = getattr(connection, "close", None)
+    if close is None:
+        return
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+    except Exception as exc:  # pragma: no cover - shutdown best effort
+        print(f"--- [API] Checkpointer close failed: {exc} ---", flush=True)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     yield
+    await _close_checkpointer()
     _observability_runtime.shutdown()
 
 
