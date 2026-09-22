@@ -27,6 +27,8 @@ const ScannerOverlay = () => {
         exitChatMode,
         messages,
         setMessages,
+        threadId,
+        setThreadId,
     } = useGlobalStore();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isUploading, setIsUploading] = useState(false);
@@ -126,6 +128,7 @@ const ScannerOverlay = () => {
                         cards: [...(m.cards ?? []), card],
                     }));
                 },
+                onSession: setThreadId,
                 onDone: () => {
                     setIsUploading(false);
                     updateAssistant(m => ({ ...m, isGenerating: false }));
@@ -137,6 +140,7 @@ const ScannerOverlay = () => {
                 }
             },
             { elder_mode: isElderMode },
+            threadId,
         );
     };
 

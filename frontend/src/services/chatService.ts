@@ -1,4 +1,4 @@
-import type { ChatMessage, AgentStep, ChatMode, ChatCardPayload } from '../types';
+import type { ChatMessage, AgentStep, ChatMode, ChatCardPayload, ThreadId } from '../types';
 
 /** Maps LangGraph node names to ChatMode strings */
 const NODE_TO_CHAT_MODE: Record<string, ChatMode> = {
@@ -18,6 +18,14 @@ export interface ChatServiceOptions {
     onModeChange?: (mode: ChatMode) => void;
     /** Called when a backend tool yields a structured UI card payload */
     onCard?: (card: ChatCardPayload) => void;
+    /** Called with the server-side thread id so it can be reused on the next turn */
+    onSession?: (threadId: ThreadId) => void;
+    /**
+     * Called when the graph suspended on an `interrupt()` (a clinic follow-up
+     * question). The question itself already arrived as `text` chunks, so the
+     * UI only needs this to know the turn ended with a pending question.
+     */
+    onInterrupt?: (question: string) => void;
     onDone: () => void;
     onError: (error: Error) => void;
 }
@@ -68,6 +76,16 @@ const consumeSseResponse = async (response: Response, options: ChatServiceOption
                     const data = JSON.parse(jsonStr);
 
                     switch (data.type) {
+                        case 'session':
+                            if (options.onSession && data.thread_id) {
+                                options.onSession(data.thread_id as ThreadId);
+                            }
+                            break;
+
+                        case 'interrupt':
+                            options.onInterrupt?.(data.content ?? '');
+                            break;
+
                         case 'text':
                             options.onChunk(data.content ?? '');
                             break;
@@ -137,16 +155,21 @@ export const streamChat = async (
     messages: ChatMessage[],
     options: ChatServiceOptions,
     userInfo?: UserInfoPayload,
-    chatMode: ChatMode = 'general'
+    chatMode: ChatMode = 'general',
+    threadId?: ThreadId | null
 ) => {
     try {
+        // With a thread_id the backend checkpointer owns the history and only
+        // needs the newest user message; without one it replays everything.
+        const outbound = threadId ? messages.slice(-1) : messages;
         const payload = {
-            messages: messages.map(msg => ({
+            messages: outbound.map(msg => ({
                 role: msg.role,
                 content: msg.text
             })),
             user_info: userInfo ?? {},
-            chat_mode: chatMode
+            chat_mode: chatMode,
+            thread_id: threadId ?? null
         };
 
         const response = await fetch('http://localhost:8000/api/chat', {
@@ -174,13 +197,16 @@ export const streamVisionChat = async (
     messages: ChatMessage[],
     options: ChatServiceOptions,
     userInfo?: UserInfoPayload,
+    threadId?: ThreadId | null
 ) => {
     try {
+        const outbound = threadId ? messages.slice(-1) : messages;
         const formData = new FormData();
         formData.append('file', file);
         formData.append('scan_type', scanType);
         formData.append('user_info', JSON.stringify(userInfo ?? {}));
-        formData.append('messages', JSON.stringify(messages.map(msg => ({
+        formData.append('thread_id', threadId ?? '');
+        formData.append('messages', JSON.stringify(outbound.map(msg => ({
             role: msg.role,
             content: msg.text
         }))));

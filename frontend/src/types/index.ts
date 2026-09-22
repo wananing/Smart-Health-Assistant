@@ -19,13 +19,26 @@ export type ScreenType =
 /** The active conversational context - determines the UI state of the chat */
 export type ChatMode = 'general' | 'clinic' | 'insurance' | 'pharmacy' | 'report' | 'dashboard';
 
+/** Server-side LangGraph conversation id, issued by the backend `session` SSE event */
+export type ThreadId = string;
+
+/** Payload the clinic subgraph streams as a `clinic_recommendation` card */
+export type ClinicRecommendationData = {
+    summary?: string;
+    departments?: string[];
+    /** UI severity, derived from `urgency` by the backend */
+    severity?: 'low' | 'medium' | 'high';
+    urgency?: 'emergency' | 'soon' | 'routine';
+    notes?: string[];
+};
+
 /** A structured UI card payload that can be embedded in a chat message */
 export type ChatCardPayload =
     | { type: 'insurance_balance'; data: Record<string, unknown> }
     | { type: 'insurance_expenses'; data: Record<string, unknown> }
     | { type: 'insurance_payments'; data: Record<string, unknown> }
     | { type: 'insurance_cross_region'; data: Record<string, unknown> }
-    | { type: 'clinic_recommendation'; data: Record<string, unknown> }
+    | { type: 'clinic_recommendation'; data: ClinicRecommendationData }
     | { type: 'report_analysis'; data: Record<string, unknown> }
     | { type: 'medication_task'; data: Record<string, unknown> }
     | { type: 'hospital_list'; data: Record<string, unknown> }

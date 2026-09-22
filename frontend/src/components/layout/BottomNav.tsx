@@ -13,7 +13,7 @@ const getVisionUserText = (scanType: VisionScanType) => {
 };
 
 const BottomNav = () => {
-    const { isElderMode, chatMode, enterChatMode, exitChatMode, messages, setMessages } = useGlobalStore();
+    const { isElderMode, chatMode, enterChatMode, exitChatMode, messages, setMessages, threadId, setThreadId } = useGlobalStore();
     const [inputValue, setInputValue] = useState('');
     const [isVisionUploading, setIsVisionUploading] = useState(false);
 
@@ -26,7 +26,7 @@ const BottomNav = () => {
         };
         window.addEventListener('chat:send', handleCustomMessage);
         return () => window.removeEventListener('chat:send', handleCustomMessage);
-    }, [messages, isElderMode]);
+    }, [messages, isElderMode, threadId]);
 
     const handleSend = async (text = inputValue) => {
         const content = text.trim();
@@ -98,6 +98,7 @@ const BottomNav = () => {
                         cards: [...(m.cards ?? []), card],
                     }));
                 },
+                onSession: setThreadId,
                 onDone: () => updateAssistant(m => ({ ...m, isGenerating: false })),
                 onError: (err) => {
                     console.error("Chat error:", err);
@@ -105,7 +106,8 @@ const BottomNav = () => {
                 }
             },
             { elder_mode: isElderMode },
-            chatMode
+            chatMode,
+            threadId
         );
     };
 
@@ -189,6 +191,7 @@ const BottomNav = () => {
                         cards: [...(m.cards ?? []), card],
                     }));
                 },
+                onSession: setThreadId,
                 onDone: () => {
                     setIsVisionUploading(false);
                     updateAssistant(m => ({ ...m, isGenerating: false }));
@@ -200,6 +203,7 @@ const BottomNav = () => {
                 }
             },
             { elder_mode: isElderMode },
+            threadId,
         );
     };
 
