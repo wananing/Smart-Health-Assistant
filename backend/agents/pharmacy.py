@@ -12,7 +12,9 @@ Tools:
   3. find_nearby_pharmacy    - 查找附近药店
   4. get_otc_recommendation  - 根据症状推荐OTC药品
 
-The agent also carries the `transfer_to_*` handoff tools.
+`search_drug_info` and `find_nearby_pharmacy` push their own `card` SSE events
+through `agents.streaming.emit_card`, so the API layer never maps tool names to
+card types. The agent also carries the `transfer_to_*` handoff tools.
 """
 import json
 from pydantic import BaseModel, Field
@@ -23,6 +25,7 @@ from langgraph.types import Command
 from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
+from agents.streaming import emit_card
 from rag.knowledge_base import get_knowledge_base
 from skills import get_agent_tools, load_skill
 
@@ -152,6 +155,7 @@ async def search_drug_info(drug_name: str) -> str:
         result["found"] = False
         result["rag_info"] = rag_info or f"未找到{drug_name}的详细信息，建议前往正规医院或药店咨询药师。"
 
+    emit_card("medication_task", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -184,6 +188,7 @@ def find_nearby_pharmacy(location: str = "") -> str:
         "pharmacies": _NEARBY_PHARMACIES,
         "tip": "支持医保刷卡的药店可直接使用医保个人账户余额购药。",
     }
+    emit_card("hospital_list", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -258,15 +263,6 @@ _PHARMACY_TOOLS = [
     find_nearby_pharmacy,
     get_otc_recommendation,
 ]
-
-# Tool names that trigger frontend card rendering
-PHARMACY_CARD_TOOLS = {t.name for t in _PHARMACY_TOOLS}
-
-# Tool names → card payload types for frontend rendering
-PHARMACY_TOOL_TO_CARD_TYPE = {
-    "search_drug_info": "medication_task",
-    "find_nearby_pharmacy": "hospital_list",
-}
 
 
 async def pharmacy_node(state: MainAgentState) -> Command | dict:

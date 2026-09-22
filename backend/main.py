@@ -11,9 +11,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.types import Command
 from agents.handoff import HANDOFF_TOOL_LABELS
-from agents.insurance import INSURANCE_CARD_TOOLS
 from agents.llm import LLMConfigurationError, resolve_model_settings
-from agents.pharmacy import PHARMACY_TOOL_TO_CARD_TYPE
 from agents.router import is_exit_request
 from agents.vision import (
     SCAN_TYPE_TO_AGENT,
@@ -118,18 +116,6 @@ _SKILL_LABELS: dict[str, str] = {
     **HANDOFF_TOOL_LABELS,
 }
 
-# --- 医保工具 → 前端卡片 payload type 映射 ---
-_INSURANCE_TOOL_TO_CARD_TYPE = {
-    "get_insurance_balance": "insurance_balance",
-    "get_consumption_records": "insurance_expenses",
-    "get_payment_records": "insurance_payments",
-    "get_cross_region_info": "insurance_cross_region",
-}
-
-_REPORT_TOOL_TO_CARD_TYPE = {
-    "lab_interpreter": "report_analysis",
-}
-
 _MODE_TO_AGENT = {
     "clinic": "clinic_agent",
     "insurance": "insurance_agent",
@@ -211,8 +197,9 @@ def _parse_messages_json(raw: str) -> list[ChatMessage]:
         raise HTTPException(status_code=400, detail=f"messages 格式错误: {exc}") from exc
 
 
-# Custom-stream payloads a node may push straight through to the client.
-# They must reuse the SSE event types the frontend already understands.
+# Custom-stream payloads an agent may push straight through to the client via
+# agents.streaming. They must reuse the SSE event types the frontend already
+# understands — this whitelist is the only place event types are gated.
 _STREAMABLE_CUSTOM_TYPES = {"card", "text"}
 
 
@@ -317,8 +304,8 @@ async def _stream_agent_events(graph_input: Any, config: dict | None = None):
                 if chunk_content:
                     yield _sse_payload({"type": "text", "content": chunk_content})
 
-            # 1b. Root-level stream chunks: custom card/text events pushed by a
-            #     node via get_stream_writer(), plus interrupt notifications.
+            # 1b. Root-level stream chunks: custom card/text events pushed by
+            #     the agents themselves (agents/streaming.py), plus interrupts.
             elif kind == "on_chain_stream":
                 decoded = _split_stream_chunk(event.get("data", {}).get("chunk"))
                 if decoded is None:
@@ -360,23 +347,9 @@ async def _stream_agent_events(graph_input: Any, config: dict | None = None):
             elif kind == "on_tool_end":
                 tool_name = event.get("name", "tool")
                 yield _sse_payload({"type": "tool_end", "tool": tool_name})
-
-                # Emit a structured card event for tools that have card mappings
-                card_type = (
-                    _INSURANCE_TOOL_TO_CARD_TYPE.get(tool_name)
-                    or PHARMACY_TOOL_TO_CARD_TYPE.get(tool_name)
-                    or _REPORT_TOOL_TO_CARD_TYPE.get(tool_name)
-                )
-                if card_type:
-                    try:
-                        raw_output = event.get("data", {}).get("output", "{}")
-                        # output may be a ToolMessage or raw string
-                        if hasattr(raw_output, "content"):
-                            raw_output = raw_output.content
-                        tool_data = json.loads(raw_output)
-                        yield _sse_payload({"type": "card", "payload": {"type": card_type, "data": tool_data}})
-                    except Exception as parse_err:
-                        print(f"--- [Card] Failed to parse tool output for {tool_name}: {parse_err} ---", flush=True)
+                # `card` events are NOT derived here: every card-producing tool
+                # (or its agent node) writes the payload itself through
+                # agents.streaming, and it arrives on the `custom` stream above.
 
         print("--- [API] Event stream finished successfully ---", flush=True)
         yield 'data: {"type": "finish"}\n\n'

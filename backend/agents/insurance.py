@@ -7,8 +7,10 @@ Uses a ReAct sub-agent with four mock tools:
   3. get_payment_records        - 查缴费记录
   4. get_cross_region_info      - 异地就医信息
 
-The agent also carries the `transfer_to_*` handoff tools, letting it release an
-off-topic question to another specialist.
+Each of those four tools pushes its own `card` SSE event through
+`agents.streaming.emit_card` before returning, so the API layer never has to
+map tool names to card types. The agent also carries the `transfer_to_*`
+handoff tools, letting it release an off-topic question to another specialist.
 """
 import json
 from datetime import date
@@ -19,6 +21,7 @@ from langgraph.types import Command
 from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
+from agents.streaming import emit_card
 from rag.knowledge_base import get_knowledge_base
 
 
@@ -94,6 +97,7 @@ def get_insurance_balance() -> str:
         "user": _MOCK_USER,
         **_MOCK_BALANCE,
     }
+    emit_card("insurance_balance", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -109,6 +113,7 @@ def get_consumption_records(months: int = 3) -> str:
         "total_self_pay": sum(r["self_pay"] for r in _MOCK_CONSUMPTION),
         "total_reimbursed": sum(r["reimbursed"] for r in _MOCK_CONSUMPTION),
     }
+    emit_card("insurance_expenses", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -123,6 +128,7 @@ def get_payment_records(months: int = 6) -> str:
         "annual_total_individual": sum(r["individual"] for r in _MOCK_PAYMENTS[:months]),
         "annual_total_employer": sum(r["employer"] for r in _MOCK_PAYMENTS[:months]),
     }
+    emit_card("insurance_payments", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -134,6 +140,7 @@ def get_cross_region_info() -> str:
         "user": _MOCK_USER,
         **_MOCK_CROSS_REGION,
     }
+    emit_card("insurance_cross_region", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -175,9 +182,6 @@ _INSURANCE_TOOLS = [
     get_cross_region_info,
     search_insurance_policy,
 ]
-
-# Tool names that trigger frontend card rendering
-INSURANCE_CARD_TOOLS = {t.name for t in _INSURANCE_TOOLS}
 
 
 def _build_insurance_agent(llm, extra_context: str = ""):

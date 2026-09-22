@@ -40,7 +40,6 @@ import operator
 from typing import Annotated, Any, Literal, Sequence, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
@@ -48,6 +47,7 @@ from pydantic import BaseModel, Field
 
 from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.llm import get_chat_llm
+from agents.streaming import emit_custom
 from rag.knowledge_base import get_knowledge_base
 from skills import get_agent_tools, load_skill
 from skills.emergency_triage.skill import EmergencyTriageSkill
@@ -195,14 +195,9 @@ class ClinicState(TypedDict, total=False):
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _emit(payload: dict) -> None:
-    """Push an SSE-shaped payload onto LangGraph's ``custom`` stream, if any."""
-    try:
-        writer = get_stream_writer()
-    except RuntimeError:  # pragma: no cover - only outside a graph run
-        return
-    if writer is not None:
-        writer(payload)
+# Alias kept for readability inside this module; the implementation is shared
+# with the other agents in agents/streaming.py.
+_emit = emit_custom
 
 
 def _transcript(state: ClinicState) -> list[BaseMessage]:

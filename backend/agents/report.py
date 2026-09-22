@@ -8,17 +8,26 @@ Business Flow:
   3. Generates a structured, plain-language explanation of abnormal values
   4. Includes lifestyle advice related to the findings
 """
-from langchain_core.messages import HumanMessage, SystemMessage
+import json
+
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
 from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
+from agents.streaming import emit_card
 from rag.knowledge_base import get_knowledge_base
 from skills import get_agent_tools, load_skill
 
 
 AGENT_ID = "report_agent"
+
+# Skill whose structured output is rendered as the `report_analysis` card. The
+# skill itself is shared with the clinic line, so the card is emitted here at
+# node level instead of from inside the generic registry tool.
+_CARD_SKILL = "lab_interpreter"
+_CARD_TYPE = "report_analysis"
 
 
 REPORT_SYSTEM_PROMPT = """你是一位专业的检验报告解读助手。用户会向你描述或粘贴化验单数据，你需要：
@@ -42,6 +51,22 @@ REPORT_SYSTEM_PROMPT = """你是一位专业的检验报告解读助手。用户
 【注意】
 - 严禁凭报告数据直接下诊断，只陈述指标含义和建议
 - 保持客观严谨，不夸大也不轻描淡写"""
+
+
+def _emit_report_cards(new_messages: list[BaseMessage]) -> None:
+    """Replay the lab_interpreter results of this turn as frontend cards."""
+    for message in new_messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        if getattr(message, "name", None) != _CARD_SKILL:
+            continue
+        content = message.content
+        if not isinstance(content, str):
+            continue
+        try:
+            emit_card(_CARD_TYPE, json.loads(content))
+        except json.JSONDecodeError as exc:
+            print(f"--- [Report] Unparsable {_CARD_SKILL} output: {exc} ---", flush=True)
 
 
 async def report_node(state: MainAgentState) -> Command | dict:
@@ -84,4 +109,5 @@ async def report_node(state: MainAgentState) -> Command | dict:
     sub_result = await agent.ainvoke({"messages": state["messages"]})
     original_count = len(state["messages"])
     new_messages = list(sub_result["messages"][original_count:])
+    _emit_report_cards(new_messages)
     return apply_handoff(state, new_messages)
