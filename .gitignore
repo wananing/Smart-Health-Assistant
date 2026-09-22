@@ -24,7 +24,6 @@ ENV/
 # tools
 .cursorrules
 .agent/
-CLAUDE.md
 .deepeval/
 # RAG vector store (auto-generated, rebuild with: python -m rag.ingest)
 backend/rag/chroma_db/
