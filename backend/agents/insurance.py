@@ -6,14 +6,22 @@ Uses a ReAct sub-agent with four mock tools:
   2. get_consumption_records    - 查医保消费明细
   3. get_payment_records        - 查缴费记录
   4. get_cross_region_info      - 异地就医信息
+
+Each of those four tools pushes its own `card` SSE event through
+`agents.streaming.emit_card` before returning, so the API layer never has to
+map tool names to card types. The agent also carries the `transfer_to_*`
+handoff tools, letting it release an off-topic question to another specialist.
 """
 import json
 from datetime import date
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command
+from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
+from agents.streaming import emit_card
 from rag.knowledge_base import get_knowledge_base
 
 
@@ -89,6 +97,7 @@ def get_insurance_balance() -> str:
         "user": _MOCK_USER,
         **_MOCK_BALANCE,
     }
+    emit_card("insurance_balance", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -104,6 +113,7 @@ def get_consumption_records(months: int = 3) -> str:
         "total_self_pay": sum(r["self_pay"] for r in _MOCK_CONSUMPTION),
         "total_reimbursed": sum(r["reimbursed"] for r in _MOCK_CONSUMPTION),
     }
+    emit_card("insurance_expenses", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -118,6 +128,7 @@ def get_payment_records(months: int = 6) -> str:
         "annual_total_individual": sum(r["individual"] for r in _MOCK_PAYMENTS[:months]),
         "annual_total_employer": sum(r["employer"] for r in _MOCK_PAYMENTS[:months]),
     }
+    emit_card("insurance_payments", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -129,6 +140,7 @@ def get_cross_region_info() -> str:
         "user": _MOCK_USER,
         **_MOCK_CROSS_REGION,
     }
+    emit_card("insurance_cross_region", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -161,6 +173,8 @@ INSURANCE_SYSTEM_PROMPT = """你是一个专业的医保政策咨询助手，熟
 【回答格式】
 工具调用完成后，简洁总结关键数据（1-3句）。数字已由卡片展示，不用大量复述数字。"""
 
+AGENT_ID = "insurance_agent"
+
 _INSURANCE_TOOLS = [
     get_insurance_balance,
     get_consumption_records,
@@ -169,23 +183,22 @@ _INSURANCE_TOOLS = [
     search_insurance_policy,
 ]
 
-# Tool names that trigger frontend card rendering
-INSURANCE_CARD_TOOLS = {t.name for t in _INSURANCE_TOOLS}
 
-
-def _build_insurance_agent(llm):
-    """Build a ReAct sub-agent scoped to insurance tools."""
+def _build_insurance_agent(llm, extra_context: str = ""):
+    """Build a ReAct sub-agent scoped to insurance tools plus the handoff tools."""
+    prompt = INSURANCE_SYSTEM_PROMPT + extra_context + handoff_prompt_section(AGENT_ID)
     return create_react_agent(
         llm,
-        tools=_INSURANCE_TOOLS,
-        prompt=SystemMessage(content=INSURANCE_SYSTEM_PROMPT),
+        tools=[*_INSURANCE_TOOLS, *get_handoff_tools(AGENT_ID)],
+        prompt=SystemMessage(content=prompt),
     )
 
 
-async def insurance_node(state: MainAgentState) -> dict:
+async def insurance_node(state: MainAgentState) -> Command | dict:
     """
     Insurance agent: uses a ReAct sub-agent to call insurance tools and answer queries.
-    Extracts messages from the sub-graph result to be compatible with MainAgentState.
+    Extracts messages from the sub-graph result to be compatible with MainAgentState,
+    or returns a ``Command`` when the sub-agent handed the turn to another specialist.
     """
     llm = get_chat_llm("balanced")
     user_info = state.get("user_info", {})
@@ -198,19 +211,10 @@ async def insurance_node(state: MainAgentState) -> dict:
     if elder_mode:
         extra_context += "\n请使用通俗易懂的语言，避免复杂的政策术语。"
 
-    # Dynamically patch the system prompt if we have user context
-    if extra_context:
-        patched_tools = _INSURANCE_TOOLS
-        agent = create_react_agent(
-            llm,
-            tools=patched_tools,
-            prompt=SystemMessage(content=INSURANCE_SYSTEM_PROMPT + extra_context),
-        )
-    else:
-        agent = _build_insurance_agent(llm)
+    agent = _build_insurance_agent(llm, extra_context)
 
     sub_result = await agent.ainvoke({"messages": state["messages"]})
     # Extract only the new messages (all except the original input messages)
     original_count = len(state["messages"])
     new_messages = sub_result["messages"][original_count:]
-    return {"messages": new_messages}
+    return apply_handoff(state, new_messages)

@@ -1,6 +1,6 @@
 // @refresh reset
 import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from 'react';
-import type { ChatMode, ChatMessage, ChatCardPayload, ScanType } from '../types';
+import type { ChatMode, ChatMessage, ChatCardPayload, ScanType, ThreadId } from '../types';
 import { USER_NAME } from '../data/mockData';
 
 // Per-mode config used to auto-generate Welcome and Exit cards
@@ -41,6 +41,16 @@ interface GlobalState {
     messages: ChatMessage[];
     setMessages: (msgs: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
 
+    /**
+     * Server-side LangGraph conversation id. `null` until the backend issues one
+     * through the `session` SSE event; once set, only the newest user message is
+     * sent and the checkpointer supplies the history.
+     */
+    threadId: ThreadId | null;
+    setThreadId: (id: ThreadId | null) => void;
+    /** Drop the server-side conversation and start a brand new thread. */
+    resetThread: () => void;
+
     isScanning: boolean;
     setIsScanning: (val: boolean) => void;
     scanType: ScanType;
@@ -65,6 +75,9 @@ export const GlobalProvider = ({ children }: { children: ReactNode }) => {
 
     const [isScanning, setIsScanning] = useState(false);
     const [scanType, setScanType] = useState<ScanType>('药盒');
+    const [threadId, setThreadId] = useState<ThreadId | null>(null);
+
+    const resetThread = useCallback(() => setThreadId(null), []);
 
     const enterChatMode = useCallback((mode: ChatMode) => {
         if (mode === 'general' || mode === 'dashboard') {
@@ -122,6 +135,9 @@ export const GlobalProvider = ({ children }: { children: ReactNode }) => {
 
     const exitChatMode = useCallback(() => {
         const mode = chatModeRef.current;
+        // Leaving a specialized mode ends the server-side conversation too, so
+        // the next message starts a fresh checkpointer thread.
+        setThreadId(null);
         if (mode === 'general' || mode === 'dashboard') return;
 
         chatModeRef.current = 'general';
@@ -172,6 +188,7 @@ export const GlobalProvider = ({ children }: { children: ReactNode }) => {
             isElderMode, setIsElderMode,
             chatMode, setChatMode, enterChatMode, exitChatMode,
             messages, setMessages,
+            threadId, setThreadId, resetThread,
             isScanning, setIsScanning,
             scanType, setScanType
         }}>

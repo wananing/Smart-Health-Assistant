@@ -1,14 +1,18 @@
 from contextlib import asynccontextmanager
+import inspect
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import json
+from typing import Any
+from uuid import uuid4
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
-from agents.insurance import INSURANCE_CARD_TOOLS
+from langgraph.types import Command
+from agents.handoff import HANDOFF_TOOL_LABELS
 from agents.llm import LLMConfigurationError, resolve_model_settings
-from agents.pharmacy import PHARMACY_TOOL_TO_CARD_TYPE
+from agents.router import is_exit_request
 from agents.vision import (
     SCAN_TYPE_TO_AGENT,
     VisionInputError,
@@ -29,13 +33,28 @@ if _observability_runtime.provider != "none":
     )
 
 
+async def _close_checkpointer() -> None:
+    """Release the checkpointer's backing connection (sqlite) on shutdown."""
+    connection = getattr(getattr(_master_app, "checkpointer", None), "conn", None)
+    close = getattr(connection, "close", None)
+    if close is None:
+        return
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+    except Exception as exc:  # pragma: no cover - shutdown best effort
+        print(f"--- [API] Checkpointer close failed: {exc} ---", flush=True)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     yield
+    await _close_checkpointer()
     _observability_runtime.shutdown()
 
 
-app = FastAPI(title="大健康 AI 后端", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="大健康 AI 后端", version="2.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,6 +83,12 @@ _NODE_LABELS = {
     "report_node": "进入报告解读模块",
     "advisor_node": "进入健康顾问模块",
     "pharmacy_node": "进入用药咨询模块",
+    # clinic subgraph internals
+    "emergency_gate": "正在进行急症安全筛查…",
+    "extract_symptoms": "正在整理症状要点…",
+    "check_sufficiency": "正在检查信息是否完整…",
+    "ask_followup": "正在准备追问…",
+    "conclude": "正在生成分诊建议…",
 }
 
 # --- 技能工具 → 前端展示标签 ---
@@ -87,18 +112,8 @@ _SKILL_LABELS: dict[str, str] = {
     "lab_interpreter":          "正在解读化验指标…",
     "risk_assessor":            "正在评估慢性病风险…",
     "medication_calculator":    "正在计算用药剂量…",
-}
-
-# --- 医保工具 → 前端卡片 payload type 映射 ---
-_INSURANCE_TOOL_TO_CARD_TYPE = {
-    "get_insurance_balance": "insurance_balance",
-    "get_consumption_records": "insurance_expenses",
-    "get_payment_records": "insurance_payments",
-    "get_cross_region_info": "insurance_cross_region",
-}
-
-_REPORT_TOOL_TO_CARD_TYPE = {
-    "lab_interpreter": "report_analysis",
+    # agent-to-agent handoffs
+    **HANDOFF_TOOL_LABELS,
 }
 
 _MODE_TO_AGENT = {
@@ -128,6 +143,9 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     user_info: UserInfo | None = None
     chat_mode: str = "general"
+    # Server-side conversation id. When supplied, the checkpointer holds the
+    # history and only the newest user message is sent to the graph.
+    thread_id: str | None = None
 
 
 def _sse_payload(payload: dict) -> str:
@@ -155,6 +173,7 @@ def _build_initial_state(
         "user_info": user_info_dict,
         "next_agent": "",
         "active_agent": active_agent,
+        "handoff_count": 0,
     }
 
 
@@ -178,15 +197,105 @@ def _parse_messages_json(raw: str) -> list[ChatMessage]:
         raise HTTPException(status_code=400, detail=f"messages 格式错误: {exc}") from exc
 
 
-async def _stream_agent_events(initial_state: dict):
+# Custom-stream payloads an agent may push straight through to the client via
+# agents.streaming. They must reuse the SSE event types the frontend already
+# understands — this whitelist is the only place event types are gated.
+_STREAMABLE_CUSTOM_TYPES = {"card", "text"}
+
+
+def _latest_user_text(messages: list[ChatMessage]) -> str:
+    for message in reversed(messages):
+        if message.role == "user" and message.content.strip():
+            return message.content
+    return ""
+
+
+def _split_stream_chunk(chunk: Any) -> tuple[str, Any] | None:
+    """
+    Decode a root-level `astream` chunk into (stream_mode, payload).
+
+    With `subgraphs=True` the root chunk is `(namespace, mode, payload)`; node
+    level `on_chain_stream` events carry plain dicts and are ignored here.
+    """
+    if not isinstance(chunk, tuple):
+        return None
+    if len(chunk) == 3:
+        return chunk[1], chunk[2]
+    if len(chunk) == 2 and isinstance(chunk[0], str):
+        return chunk[0], chunk[1]
+    return None
+
+
+def _interrupt_question(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("question", "content", "text"):
+            if isinstance(value.get(key), str):
+                return value[key]
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+async def _resolve_graph_input(
+    config: dict,
+    turn_state: dict,
+    full_state: dict,
+    user_text: str,
+) -> Any:
+    """
+    Decide what to feed the graph for this request.
+
+    - pending interrupt + exit phrase -> None, meaning "drop this thread"
+    - pending interrupt on the thread -> resume it with the user's answer
+    - known thread                    -> only the newest message
+    - unknown thread                  -> the full history from the request
+    """
+    master_app = get_master_app()
+    try:
+        snapshot = await master_app.aget_state(config)
+    except Exception as exc:  # pragma: no cover - checkpointer backend dependent
+        print(f"--- [API] Unable to read thread state: {exc} ---", flush=True)
+        return full_state
+
+    pending = [
+        interrupt
+        for task in getattr(snapshot, "tasks", ())
+        for interrupt in getattr(task, "interrupts", ())
+    ]
+    if pending:
+        if is_exit_request(user_text):
+            # Never swallow an exit phrase as an answer to a follow-up question.
+            print("--- [API] Exit phrase during an interrupt, dropping thread ---", flush=True)
+            return None
+        print("--- [API] Resuming a pending interrupt ---", flush=True)
+        return Command(resume=user_text)
+
+    if getattr(snapshot, "values", None):
+        return turn_state
+    return full_state
+
+
+async def _stream_agent_events(graph_input: Any, config: dict | None = None):
+    seen_interrupts: set[str] = set()
     try:
         print("--- [API] Starting event stream ---", flush=True)
         master_app = get_master_app()
-        async for event in master_app.astream_events(initial_state, version="v2"):
+        async for event in master_app.astream_events(
+            graph_input,
+            config=config,
+            version="v2",
+            stream_mode=["updates", "custom"],
+            subgraphs=True,
+        ):
             kind = event["event"]
             node_name = event.get("name", "")
 
-            if kind not in ("on_chat_model_stream", "on_chat_model_start", "on_chat_model_end"):
+            if kind not in (
+                "on_chat_model_stream",
+                "on_chat_model_start",
+                "on_chat_model_end",
+                "on_chain_stream",
+            ):
                 print(f"--- [Event] {kind} | Node: {node_name} ---", flush=True)
 
             # 1. LLM is streaming text tokens
@@ -194,6 +303,29 @@ async def _stream_agent_events(initial_state: dict):
                 chunk_content = event["data"]["chunk"].content
                 if chunk_content:
                     yield _sse_payload({"type": "text", "content": chunk_content})
+
+            # 1b. Root-level stream chunks: custom card/text events pushed by
+            #     the agents themselves (agents/streaming.py), plus interrupts.
+            elif kind == "on_chain_stream":
+                decoded = _split_stream_chunk(event.get("data", {}).get("chunk"))
+                if decoded is None:
+                    continue
+                stream_mode, stream_payload = decoded
+                if stream_mode == "custom":
+                    if (
+                        isinstance(stream_payload, dict)
+                        and stream_payload.get("type") in _STREAMABLE_CUSTOM_TYPES
+                    ):
+                        yield _sse_payload(stream_payload)
+                elif stream_mode == "updates" and isinstance(stream_payload, dict):
+                    for item in stream_payload.get("__interrupt__", ()) or ():
+                        marker = str(getattr(item, "id", "") or id(item))
+                        if marker in seen_interrupts:
+                            continue
+                        seen_interrupts.add(marker)
+                        question = _interrupt_question(getattr(item, "value", item))
+                        yield _sse_payload({"type": "text", "content": question})
+                        yield _sse_payload({"type": "interrupt", "content": question})
 
             # 2. A graph node is starting (shows agent status in UI)
             elif kind == "on_chain_start":
@@ -215,23 +347,9 @@ async def _stream_agent_events(initial_state: dict):
             elif kind == "on_tool_end":
                 tool_name = event.get("name", "tool")
                 yield _sse_payload({"type": "tool_end", "tool": tool_name})
-
-                # Emit a structured card event for tools that have card mappings
-                card_type = (
-                    _INSURANCE_TOOL_TO_CARD_TYPE.get(tool_name)
-                    or PHARMACY_TOOL_TO_CARD_TYPE.get(tool_name)
-                    or _REPORT_TOOL_TO_CARD_TYPE.get(tool_name)
-                )
-                if card_type:
-                    try:
-                        raw_output = event.get("data", {}).get("output", "{}")
-                        # output may be a ToolMessage or raw string
-                        if hasattr(raw_output, "content"):
-                            raw_output = raw_output.content
-                        tool_data = json.loads(raw_output)
-                        yield _sse_payload({"type": "card", "payload": {"type": card_type, "data": tool_data}})
-                    except Exception as parse_err:
-                        print(f"--- [Card] Failed to parse tool output for {tool_name}: {parse_err} ---", flush=True)
+                # `card` events are NOT derived here: every card-producing tool
+                # (or its agent node) writes the payload itself through
+                # agents.streaming, and it arrives on the `custom` stream above.
 
         print("--- [API] Event stream finished successfully ---", flush=True)
         yield 'data: {"type": "finish"}\n\n'
@@ -243,7 +361,7 @@ async def _stream_agent_events(initial_state: dict):
 
 @app.get("/")
 async def root():
-    return {"message": "大健康 AI 后端 v2.0 (LangGraph)"}
+    return {"message": "大健康 AI 后端 v2.1 (LangGraph)"}
 
 
 @app.get("/health")
@@ -259,11 +377,27 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=f"大模型配置错误：{exc}") from exc
 
     active_agent = _MODE_TO_AGENT.get(request.chat_mode, "advisor_agent")
-    initial_state = _build_initial_state(request.messages, request.user_info, active_agent)
-    return StreamingResponse(
-        _stream_agent_events(initial_state),
-        media_type="text/event-stream",
-    )
+    thread_id = (request.thread_id or "").strip() or uuid4().hex
+    config = {"configurable": {"thread_id": thread_id}}
+    full_state = _build_initial_state(request.messages, request.user_info, active_agent)
+    turn_state = _build_initial_state(request.messages[-1:], request.user_info, active_agent)
+    user_text = _latest_user_text(request.messages)
+
+    async def event_generator():
+        active_thread_id = thread_id
+        active_config = config
+        graph_input = await _resolve_graph_input(config, turn_state, full_state, user_text)
+        if graph_input is None:
+            # The user left mid-interview: abandon the suspended thread so the
+            # router gets to see the exit phrase on a clean conversation.
+            active_thread_id = uuid4().hex
+            active_config = {"configurable": {"thread_id": active_thread_id}}
+            graph_input = full_state
+        yield _sse_payload({"type": "session", "thread_id": active_thread_id})
+        async for payload in _stream_agent_events(graph_input, active_config):
+            yield payload
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.post("/api/vision-chat")
@@ -272,6 +406,7 @@ async def vision_chat(
     scan_type: str = Form(...),
     user_info: str = Form("{}"),
     messages: str = Form("[]"),
+    thread_id: str = Form(""),
 ):
     normalized_scan_type = normalize_scan_type(scan_type)
     parsed_user_info = _parse_user_info_json(user_info)
@@ -283,8 +418,13 @@ async def vision_chat(
     except VisionInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    resolved_thread_id = thread_id.strip() or uuid4().hex
+    config = {"configurable": {"thread_id": resolved_thread_id}}
+
     async def event_generator():
         try:
+            yield _sse_payload({"type": "session", "thread_id": resolved_thread_id})
+            # An image upload is never an exit phrase, so the thread always holds.
             yield _sse_payload({
                 "type": "tool_start",
                 "tool": "vision_model",
@@ -298,13 +438,15 @@ async def vision_chat(
             yield _sse_payload({"type": "tool_end", "tool": "vision_model"})
 
             injected_message = compose_agent_message(normalized_scan_type, vision_text)
-            vision_messages = [
-                *parsed_messages[-9:],
-                ChatMessage(role="user", content=injected_message),
-            ]
+            latest_message = ChatMessage(role="user", content=injected_message)
+            vision_messages = [*parsed_messages[-9:], latest_message]
             active_agent = SCAN_TYPE_TO_AGENT[normalized_scan_type]
-            initial_state = _build_initial_state(vision_messages, parsed_user_info, active_agent)
-            async for payload in _stream_agent_events(initial_state):
+            full_state = _build_initial_state(vision_messages, parsed_user_info, active_agent)
+            turn_state = _build_initial_state([latest_message], parsed_user_info, active_agent)
+            graph_input = await _resolve_graph_input(
+                config, turn_state, full_state, injected_message
+            )
+            async for payload in _stream_agent_events(graph_input or full_state, config):
                 yield payload
 
         except VisionInputError as exc:

@@ -11,14 +11,21 @@ Tools:
   2. check_drug_interaction  - 检查药物间相互作用
   3. find_nearby_pharmacy    - 查找附近药店
   4. get_otc_recommendation  - 根据症状推荐OTC药品
+
+`search_drug_info` and `find_nearby_pharmacy` push their own `card` SSE events
+through `agents.streaming.emit_card`, so the API layer never maps tool names to
+card types. The agent also carries the `transfer_to_*` handoff tools.
 """
 import json
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command
+from agents.handoff import apply_handoff, get_handoff_tools, handoff_prompt_section
 from agents.state import MainAgentState
 from agents.llm import get_chat_llm
+from agents.streaming import emit_card
 from rag.knowledge_base import get_knowledge_base
 from skills import get_agent_tools, load_skill
 
@@ -148,6 +155,7 @@ async def search_drug_info(drug_name: str) -> str:
         result["found"] = False
         result["rag_info"] = rag_info or f"未找到{drug_name}的详细信息，建议前往正规医院或药店咨询药师。"
 
+    emit_card("medication_task", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -180,6 +188,7 @@ def find_nearby_pharmacy(location: str = "") -> str:
         "pharmacies": _NEARBY_PHARMACIES,
         "tip": "支持医保刷卡的药店可直接使用医保个人账户余额购药。",
     }
+    emit_card("hospital_list", result)
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -246,6 +255,8 @@ PHARMACY_SYSTEM_PROMPT = """你是大健康App中的"AI药师助手"，拥有丰
 - 重要警告信息置于回答开头
 - 使用列表格式展示药品信息"""
 
+AGENT_ID = "pharmacy_agent"
+
 _PHARMACY_TOOLS = [
     search_drug_info,
     check_drug_interaction,
@@ -253,20 +264,12 @@ _PHARMACY_TOOLS = [
     get_otc_recommendation,
 ]
 
-# Tool names that trigger frontend card rendering
-PHARMACY_CARD_TOOLS = {t.name for t in _PHARMACY_TOOLS}
 
-# Tool names → card payload types for frontend rendering
-PHARMACY_TOOL_TO_CARD_TYPE = {
-    "search_drug_info": "medication_task",
-    "find_nearby_pharmacy": "hospital_list",
-}
-
-
-async def pharmacy_node(state: MainAgentState) -> dict:
+async def pharmacy_node(state: MainAgentState) -> Command | dict:
     """
     Pharmacy agent: ReAct sub-agent with Pydantic-validated tool schemas.
     Handles drug info, interactions, OTC recommendations, and pharmacy lookup.
+    Returns a ``Command`` when the sub-agent transferred the turn elsewhere.
     """
     llm = get_chat_llm("balanced")
     user_info = state.get("user_info", {})
@@ -285,18 +288,18 @@ async def pharmacy_node(state: MainAgentState) -> dict:
     if elder_mode:
         extra_context += "\n请使用通俗易懂的语言，避免专业术语。"
 
-    system_prompt = PHARMACY_SYSTEM_PROMPT + extra_context
+    system_prompt = PHARMACY_SYSTEM_PROMPT + extra_context + handoff_prompt_section(AGENT_ID)
 
     # Load pharmacy-tagged skills (medication_calculator) alongside core tools
     skill_tools = get_agent_tools(tags=["pharmacy"])
 
     agent = create_react_agent(
         llm,
-        tools=[*_PHARMACY_TOOLS, load_skill, *skill_tools],
+        tools=[*_PHARMACY_TOOLS, load_skill, *skill_tools, *get_handoff_tools(AGENT_ID)],
         prompt=SystemMessage(content=system_prompt),
     )
 
     sub_result = await agent.ainvoke({"messages": state["messages"]})
     original_count = len(state["messages"])
     new_messages = sub_result["messages"][original_count:]
-    return {"messages": new_messages}
+    return apply_handoff(state, new_messages)

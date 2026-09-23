@@ -1,4 +1,5 @@
 import asyncio
+from uuid import uuid4
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
@@ -14,7 +15,9 @@ async def test(phrase, active="clinic_agent"):
         "active_agent": active
     }
     result = None
-    async for event in master_app.astream_events(state, version="v2"):
+    # The master graph is compiled with a checkpointer, so a thread_id is required.
+    config = {"configurable": {"thread_id": f"exit-phrase-{uuid4().hex}"}}
+    async for event in master_app.astream_events(state, config=config, version="v2"):
         if event["event"] == "on_chain_end" and event.get("name") == "router":
             output = event.get("data", {}).get("output", {})
             result = output.get("next_agent", "UNKNOWN")

@@ -1,7 +1,7 @@
 [project]
 name = "backend"
-version = "0.1.0"
-description = "Add your description here"
+version = "2.1.0"
+description = "大健康智能助手后端：FastAPI + LangGraph 多智能体编排、RAG 知识库与 SSE 流式接口"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -32,6 +32,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.40.0",
     "openinference-instrumentation-langchain>=0.1.70",
     "openinference-instrumentation-openai>=0.1.54",
+    "langgraph-checkpoint-sqlite>=3.1.1",
 ]
 
 [[tool.uv.index]]
