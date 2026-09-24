@@ -4,7 +4,7 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [2.1.0]
+## [0.4.0]
 
 ### 新增
 
@@ -28,6 +28,6 @@
 - 关闭服务时释放 checkpointer 的底层连接（sqlite 后端）。
 - 自定义流写入器在图运行之外会抛出 `KeyError('__pregel_runtime')` 而非 `RuntimeError`，导致工具在脚本/测试里直接调用时报错；现已统一兜底。
 
-## [2.0.0]
+## [0.3.0]
 
 LangGraph 多智能体基线：Router + clinic / insurance / report / pharmacy / advisor 五个专科节点、SSE 流式接口（`text`、`node_start`/`node_end`、`tool_start`/`tool_end`、`card`、`finish`、`error`）、混合检索 RAG 知识库（BM25 + Dense MMR）、自动发现的 Agent Skills 体系、多模型供应商配置（`agents/llm.py`）、视觉识别接口 `POST /api/vision-chat`，以及 observability / evals 支持。

@@ -102,7 +102,7 @@ Four of the five agents run their ReAct agent with `create_react_agent(...).ainv
 
 ### Cards: emitted by the agent, not sniffed in `main.py`
 
-Since v2.1.0 `main.py` knows **nothing** about tool names for card purposes — there are no tool→card-type dicts. Every card-producing tool pushes its own already-shaped SSE payload through `agents/streaming.py` (`emit_card(card_type, data)` → `get_stream_writer()`), and `_stream_agent_events` forwards it from the `custom` stream. Verified: a `get_stream_writer()` write from inside a tool run by a ReAct agent nested in a node *does* surface on the root `astream_events(..., subgraphs=True)` stream, and it lands after `tool_end` and before the final summary text — the same order as the old `on_tool_end` branch.
+Since v0.4.0 `main.py` knows **nothing** about tool names for card purposes — there are no tool→card-type dicts. Every card-producing tool pushes its own already-shaped SSE payload through `agents/streaming.py` (`emit_card(card_type, data)` → `get_stream_writer()`), and `_stream_agent_events` forwards it from the `custom` stream. Verified: a `get_stream_writer()` write from inside a tool run by a ReAct agent nested in a node *does* surface on the root `astream_events(..., subgraphs=True)` stream, and it lands after `tool_end` and before the final summary text — the same order as the old `on_tool_end` branch.
 
 Who emits what:
 

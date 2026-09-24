@@ -10,7 +10,7 @@
 - 支持 **多模型配置**：聊天模型可切换 ARK、OpenAI、DeepSeek、通义千问、智谱或任意 OpenAI-compatible 服务；图片模型可独立选择支持视觉输入的兼容模型
 - 新增支持 **RAG 知识库增强**，包括常见疾病、医保政策、检验参考范围、药品用药指南等。 详见 [docs/rag.md](docs/rag.md)
 - 新增支持 **Agent Skills System**，每个智能体均可动态加载**模块化领域技能**，无需修改 Agent 代码即可扩展能力。 详见 [docs/skills.md](docs/skills.md)
-- v2.1 新增 **服务端会话、预问诊子图与 Agent 转接**：Checkpointer + `thread_id`、代码级急症闸门、`interrupt()` 追问、专科之间的 `Command` handoff。详见 [docs/langgraph-runtime.md](docs/langgraph-runtime.md) 与 [CHANGELOG.md](CHANGELOG.md)
+- v0.4 新增 **服务端会话、预问诊子图与 Agent 转接**：Checkpointer + `thread_id`、代码级急症闸门、`interrupt()` 追问、专科之间的 `Command` handoff。详见 [docs/langgraph-runtime.md](docs/langgraph-runtime.md) 与 [CHANGELOG.md](CHANGELOG.md)
 
 
 

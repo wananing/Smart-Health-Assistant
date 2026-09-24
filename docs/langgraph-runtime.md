@@ -81,7 +81,7 @@ extract_symptoms ──► check_sufficiency ──信息充分──► conclud
 
 ### 卡片推送
 
-`conclude` 与 CRITICAL 分支通过 `agents/streaming.py` 的 `emit_custom()` 把已经成形的 SSE payload 推入 custom 流，`main.py` 的 `_stream_agent_events` 以 `stream_mode=["updates", "custom"]` + `subgraphs=True` 消费，并只放行 `card` / `text` 两种类型。自 v2.1.0 起，**所有**卡片都走这条路（见下文"卡片归属"），`main.py` 里的工具名嗅探已经删除。
+`conclude` 与 CRITICAL 分支通过 `agents/streaming.py` 的 `emit_custom()` 把已经成形的 SSE payload 推入 custom 流，`main.py` 的 `_stream_agent_events` 以 `stream_mode=["updates", "custom"]` + `subgraphs=True` 消费，并只放行 `card` / `text` 两种类型。自 v0.4.0 起，**所有**卡片都走这条路（见下文"卡片归属"），`main.py` 里的工具名嗅探已经删除。
 
 `clinic_recommendation` 卡片的数据形状与前端 `ChatCardRenderer.tsx` 对齐：
 
@@ -151,7 +151,7 @@ extract_symptoms ──► check_sufficiency ──信息充分──► conclud
 
 ## 卡片归属：由 Agent 自己推送
 
-v2.1.0 之前，`main.py` 在 `on_tool_end` 上用三张 "工具名 → 卡片类型" 字典嗅探卡片。这三张字典（`_INSURANCE_TOOL_TO_CARD_TYPE`、`_REPORT_TOOL_TO_CARD_TYPE`、`PHARMACY_TOOL_TO_CARD_TYPE`）以及对应的解析分支都已删除，`main.py` 不再认识任何工具名（`_SKILL_LABELS` 里的展示文案除外）。
+v0.4.0 之前，`main.py` 在 `on_tool_end` 上用三张 "工具名 → 卡片类型" 字典嗅探卡片。这三张字典（`_INSURANCE_TOOL_TO_CARD_TYPE`、`_REPORT_TOOL_TO_CARD_TYPE`、`PHARMACY_TOOL_TO_CARD_TYPE`）以及对应的解析分支都已删除，`main.py` 不再认识任何工具名（`_SKILL_LABELS` 里的展示文案除外）。
 
 新模型：卡片由产生它的 Agent 自己推送。
 

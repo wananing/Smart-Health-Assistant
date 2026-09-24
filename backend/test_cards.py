@@ -1,7 +1,7 @@
 """
 Deterministic tests for agent-owned `card` SSE events.
 
-Since v2.1.0 `main.py` no longer maps tool names to card types: every
+Since v0.4.0 `main.py` no longer maps tool names to card types: every
 card-producing tool (or its agent node) pushes the payload itself through
 `agents.streaming`, and `_stream_agent_events` forwards the `custom` stream
 verbatim. These tests pin both the payloads and their position in the stream.
