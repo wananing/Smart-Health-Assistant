@@ -198,6 +198,7 @@ def _findrisc(data: RiskAssessorInput) -> tuple[int, RiskLevel]:
 
 class RiskAssessorSkill(BaseSkill):
     name = "risk_assessor"
+    input_schema = RiskAssessorInput
     description = (
         "基于用户的年龄、血压、血脂、生活方式等信息，评估10年心血管疾病（CVD）风险"
         "和2型糖尿病风险（FINDRISC量表），给出风险等级、关键可干预因素和预防建议。"

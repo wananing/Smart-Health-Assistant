@@ -67,6 +67,7 @@ _BMI_CATEGORIES = [
 
 class HealthCalculatorSkill(BaseSkill):
     name = "health_calculator"
+    input_schema = HealthCalcInput
     description = (
         "计算用户的 BMI、理想体重、每日热量需求（TDEE）和腰围身高比，给出健康体重评估。"
         "输入：身高、体重、年龄、性别、活动水平；可选：腰围。"

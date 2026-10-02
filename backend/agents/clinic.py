@@ -5,28 +5,40 @@ The clinic line is the only agent with a real multi-step state machine. It owns
 its private ``ClinicState`` and is mounted as a subgraph inside the master graph
 in ``agents/graph.py``:
 
-    emergency_gate ──CRITICAL──────────────────────────────────────────► END
-          │                                                              ▲
-          │ safe enough to interview                                     │
-          ▼                                                              │
-    extract_symptoms ──► check_sufficiency ──enough──► conclude ─────────┘
-          ▲                     │
-          │                     │ missing required facts
-          │                     ▼
-          └── await_answer ◄── ask_followup        (interrupt() + resume)
+    ┌──► emergency_gate ──CRITICAL─────────────────────────────────────► END
+    │          │                                                          ▲
+    │          │ safe enough to interview                                 │
+    │          ▼                                                          │
+    │    extract_symptoms ──► check_sufficiency ──enough──► conclude ─────┘
+    │                               │      │                  ▲
+    │                               │      │ voice only       │ affirmed /
+    │         missing required facts│      └─► confirm_facts ─┘ cap reached
+    │                               ▼              │
+    ├──── await_answer ◄──── ask_followup          │ correction
+    └──────────────────────────────────────────────┘
 
 Node responsibilities:
   emergency_gate    Pure rule matching (no LLM). Calls ``EmergencyTriageSkill``
                     directly so the red-flag gate can never be skipped by an
                     LLM that decides not to call the tool. CRITICAL short-
                     circuits the whole subgraph with the verbatim safety text.
-  extract_symptoms  LLM with ``with_structured_output`` into ``SymptomFacts``;
-                    merged into ``ClinicState['collected']`` across turns.
+                    It runs on entry AND on every resumed answer, so a red
+                    flag mentioned while answering a follow-up is caught too.
+  extract_symptoms  ONE structured LLM call (``InterviewStep``): the symptom
+                    facts, merged into ``ClinicState['collected']``, and a
+                    drafted next question (empty when nothing is missing).
   check_sufficiency Deterministic check for the required fields.
-  ask_followup      LLM writes ONE gentle follow-up question.
-  await_answer      ``interrupt()`` — suspends the whole graph until the next
-                    request on the same ``thread_id`` resumes it with the
-                    user's answer, which loops back into extract_symptoms.
+  ask_followup      No LLM: asks the drafted question (or a template when the
+                    draft is empty / too long) — exactly one question.
+  await_answer      ``interrupt({"kind": "followup", ...})`` — suspends the
+                    whole graph until the next request on the same
+                    ``thread_id`` resumes it with the user's answer, which
+                    loops back through the emergency gate.
+  confirm_facts     Voice channel only. Reads the collected facts back from a
+                    template (no LLM) with ``interrupt({"kind": "confirm",
+                    ...})``; an anchored affirmative goes on to conclude, any
+                    other answer is a correction and is re-extracted. At most
+                    ``MAX_CONFIRMATIONS`` read-backs per turn.
   conclude          ReAct agent (clinic skills + RAG) writes the triage text,
                     then a structured recommendation is streamed to the client
                     as a ``clinic_recommendation`` card.
@@ -75,18 +87,20 @@ CLINIC_SYSTEM_PROMPT = """你是大健康App中的"AI预问诊助手"，态度�
 急症安全评估已由系统在进入本节点前完成，无需再调用 emergency_triage。
 请直接开始回答，不要重复系统提示内容。"""
 
-EXTRACT_SYSTEM_PROMPT = """你是一个医疗信息抽取器。请阅读预问诊对话，抽取结构化的症状要点。
+# One structured call does both halves of an interview step (it used to be
+# two serial LLM calls, extract then ask): the facts, and the next question.
+INTERVIEW_SYSTEM_PROMPT = """你是预问诊助手的"信息整理 + 追问"环节。请阅读预问诊对话，一次完成两件事。
 
-规则：
+一、抽取结构化症状要点（facts）：
 - 只抽取用户明确说过的内容，没有提到的字段一律留空字符串或空数组，禁止推测或编造。
 - duration 用原话表达（如"三天"、"两周"、"今天早上开始"）。
 - severity 归一化为"轻微"/"中等"/"严重"之一。
-- 不要输出诊断结论。"""
+- 用户后来更正的内容以更正为准（例如先说"三天"、后来说"其实是五天"，duration 取"五天"）。
+- 不要输出诊断结论。
 
-FOLLOWUP_SYSTEM_PROMPT = """你是一位温和的预问诊护士。请针对缺失的信息，向用户提出**一个**问题。
-
-规则：
-- 只问一个问题，不超过 40 个字，不要编号，不要罗列多个问题。
+二、写下一个追问（next_question）：
+- 必须收集的信息是：主要不适（主诉）、持续时间、严重程度。三项都已明确时，next_question 留空字符串。
+- 否则像一位温和的预问诊护士，针对缺失的信息只问**一个**问题，不超过 40 个字，不要编号，不要罗列多个问题。
 - 语气关怀、口语化，可以先用半句话共情再提问。
 - 不要给出诊断、用药或就诊建议。
 - 不要重复已经问过的问题。"""
@@ -100,11 +114,40 @@ RECOMMENDATION_SYSTEM_PROMPT = """请把下面这段预问诊结论压缩成结�
 - notes 给出 1-4 条就诊前注意事项。
 - 只依据给定文本，不要新增结论。"""
 
+# Voice channel only: the first line of the conclusion is what the call says
+# out loud while the body is still streaming to the screen.
+VOICE_LEAD_INSTRUCTION = """
+
+【语音通道】用户正在语音通话中。回答的第一行必须是一句给用户听的口语结论：
+- 不超过 40 个字，包含建议就诊的科室和紧急程度（例如"建议您今天去神经内科看看。"）；
+- 不下诊断，不用 Markdown，不用编号，以句号结尾；
+然后换行，再写完整的分诊建议正文。"""
+
+MAX_SPOKEN_LEAD_CHARS = 60
+_LEAD_END = "。！？!?\n"
+
 # Fields the interview must collect before the agent is allowed to conclude.
 REQUIRED_FIELDS: tuple[str, ...] = ("chief_complaint", "duration", "severity")
 
 # Safety valve: never interrogate the user more than this many times per turn.
 MAX_FOLLOWUPS = 3
+
+# A drafted question longer than this is not "one short question": use the template.
+MAX_QUESTION_CHARS = 60
+
+# Voice channel: read the facts back at most this many times, then conclude.
+MAX_CONFIRMATIONS = 2
+
+# Answers that confirm a read-back. The whole reply must consist of these
+# tokens (split on punctuation), so 对，但是是五天 is a correction, not a yes.
+AFFIRMATIVE_PHRASES = frozenset(
+    {
+        "对", "对的", "对对", "对对对", "对啊", "对呀", "是", "是的", "是啊",
+        "是呀", "是这样", "没错", "没错没错", "嗯", "嗯嗯", "嗯对", "好", "好的",
+        "可以", "行", "没问题", "正确", "继续",
+    }
+)
+_ANSWER_BOUNDARY = " \t　，,。.！!？?；;、~～…·"
 
 _FIELD_LABELS = {
     "chief_complaint": "主要不适（主诉）",
@@ -135,6 +178,16 @@ class SymptomFacts(BaseModel):
     associated_symptoms: list[str] = Field(default_factory=list, description="伴随症状列表")
     onset: str = Field(default="", description="起病方式，如突发 / 逐渐加重")
     triggers: str = Field(default="", description="诱因或加重、缓解因素")
+
+
+class InterviewStep(BaseModel):
+    """One interview step: the facts so far and the next question (if any)."""
+
+    facts: SymptomFacts = Field(default_factory=SymptomFacts, description="结构化症状要点")
+    next_question: str = Field(
+        default="",
+        description="下一个追问（一个问题，不超过40字）；主诉、持续时间、严重程度都已明确时留空",
+    )
 
 
 class TriageRecommendation(BaseModel):
@@ -190,7 +243,15 @@ class ClinicState(TypedDict, total=False):
     is_sufficient: bool
     followup_count: int
     pending_question: str
+    # Question drafted by extract_symptoms in the same call as the facts;
+    # used by ask_followup only if check_sufficiency finds something missing.
+    draft_question: str
     recommendation: dict
+    # "text" (default) or "voice"; mirrored from MainAgentState.
+    channel: str
+    # Voice read-back bookkeeping (confirm_facts).
+    confirm_count: int
+    facts_confirmed: bool
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -255,6 +316,67 @@ def _missing_fields(collected: dict) -> list[str]:
     return [field for field in REQUIRED_FIELDS if not collected.get(field)]
 
 
+def _is_voice(state: ClinicState) -> bool:
+    return state.get("channel") == "voice"
+
+
+def is_affirmative_answer(text: str) -> bool:
+    """
+    True when a read-back answer is a plain "yes".
+
+    Anchored like ``router.is_exit_request`` but stricter: every
+    punctuation-separated piece must be an affirmative token, so ``对，继续``
+    confirms while ``对，但是是五天`` is treated as a correction.
+    """
+    pieces = [
+        piece
+        for piece in "".join(
+            " " if char in _ANSWER_BOUNDARY else char for char in text.strip()
+        ).split()
+        if piece
+    ]
+    return bool(pieces) and all(piece in AFFIRMATIVE_PHRASES for piece in pieces)
+
+
+_SEVERITY_READBACK = {"轻微": "比较轻", "中等": "中等程度", "严重": "比较严重"}
+
+
+def build_readback(collected: dict) -> str:
+    """Template read-back of the collected facts — never an LLM, never a diagnosis."""
+    parts: list[str] = []
+    if collected.get("chief_complaint"):
+        parts.append(str(collected["chief_complaint"]))
+    if collected.get("location"):
+        parts.append(f"部位在{collected['location']}")
+    if collected.get("duration"):
+        duration = str(collected["duration"])
+        parts.append(duration if duration.startswith(("持续", "从", "今天", "昨天")) else f"持续{duration}")
+    if collected.get("severity"):
+        severity = str(collected["severity"])
+        parts.append(_SEVERITY_READBACK.get(severity, severity))
+    associated = collected.get("associated_symptoms") or []
+    if isinstance(associated, list) and associated:
+        parts.append("还伴有" + "、".join(str(item) for item in associated[:3]))
+    if not parts:
+        return "我确认一下：您还没有说具体哪里不舒服，对吗？"
+    return f"我确认一下：{'，'.join(parts)}，对吗？"
+
+
+def extract_spoken_lead(text: str) -> str:
+    """
+    The one-sentence spoken conclusion at the start of a voice-channel answer,
+    or "" when the answer does not start with one (heading, too long, no end).
+    Shared with the voice gateway, which cuts the same sentence off the stream.
+    """
+    stripped = text.lstrip()
+    if not stripped or stripped.startswith(("#", "-", "*", "|", ">")):
+        return ""
+    for index, char in enumerate(stripped[: MAX_SPOKEN_LEAD_CHARS + 1]):
+        if char in _LEAD_END:
+            return stripped[: index + (char != "\n")].strip()
+    return ""
+
+
 def _clinic_card(recommendation: dict) -> dict:
     """Build the ``clinic_recommendation`` card payload the frontend renders."""
     urgency = recommendation.get("urgency", "routine")
@@ -307,39 +429,53 @@ async def emergency_gate(state: ClinicState) -> dict:
     return {
         "emergency_level": result.level,
         "turn_messages": [answer],
-        "messages": [answer],
+        # On a resumed answer the follow-up Q&A of this turn must reach the
+        # parent history too; on entry turn_messages is still empty.
+        "messages": [*state.get("turn_messages", []), answer],
         "recommendation": recommendation,
     }
 
 
 def route_after_gate(state: ClinicState) -> str:
-    """CRITICAL ends the subgraph immediately; anything else starts the interview."""
+    """CRITICAL ends the subgraph immediately; anything else (re)enters the interview."""
     return END if state.get("emergency_level") == "CRITICAL" else "extract_symptoms"
 
 
 async def extract_symptoms(state: ClinicState) -> dict:
-    """Pull structured symptom facts out of the transcript and merge them."""
+    """
+    One structured LLM call: merge the transcript's symptom facts and draft
+    the next follow-up question. Whether the question is used is still decided
+    deterministically by ``check_sufficiency``.
+    """
     transcript = _format_transcript(state)
     if not transcript:
         return {}
 
     llm = get_chat_llm("precise", streaming=False)
     try:
-        facts = await llm.with_structured_output(SymptomFacts).ainvoke(
+        step = await llm.with_structured_output(InterviewStep).ainvoke(
             [
-                SystemMessage(content=EXTRACT_SYSTEM_PROMPT),
-                HumanMessage(content=f"预问诊对话：\n{transcript}"),
+                SystemMessage(content=INTERVIEW_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=(
+                        f"已收集到的信息：\n{_format_collected(state.get('collected', {}))}\n\n"
+                        f"预问诊对话：\n{transcript}"
+                    )
+                ),
             ]
         )
     except Exception as exc:  # pragma: no cover - provider/network dependent
-        print(f"--- [Clinic] symptom extraction failed: {exc} ---", flush=True)
-        return {}
+        print(f"--- [Clinic] interview step failed: {type(exc).__name__} ---", flush=True)
+        return {"draft_question": ""}
 
-    if isinstance(facts, SymptomFacts):
-        return {"collected": facts.model_dump()}
-    if isinstance(facts, dict):
-        return {"collected": facts}
-    return {}
+    if isinstance(step, dict):
+        step = InterviewStep.model_validate(step)
+    if not isinstance(step, InterviewStep):
+        return {"draft_question": ""}
+    return {
+        "collected": step.facts.model_dump(),
+        "draft_question": step.next_question.strip(),
+    }
 
 
 async def check_sufficiency(state: ClinicState) -> dict:
@@ -347,6 +483,10 @@ async def check_sufficiency(state: ClinicState) -> dict:
     collected = state.get("collected", {})
     missing = _missing_fields(collected)
     exhausted = state.get("followup_count", 0) >= MAX_FOLLOWUPS
+    if _is_voice(state):
+        # Drives the voice call's symptom panel; the text channel never sees it
+        # (main._STREAMABLE_CUSTOM_TYPES does not forward "facts" over SSE).
+        _emit({"type": "facts", "collected": dict(collected), "missing": missing})
     return {
         "missing_fields": missing,
         "is_sufficient": not missing or exhausted,
@@ -354,38 +494,41 @@ async def check_sufficiency(state: ClinicState) -> dict:
 
 
 def route_after_sufficiency(state: ClinicState) -> str:
-    """Route to ``conclude`` when the interview has what it needs."""
-    return "conclude" if state.get("is_sufficient") else "ask_followup"
+    """
+    Route to ``conclude`` when the interview has what it needs.
+
+    On the voice channel the facts are read back first (``confirm_facts``)
+    unless the user already confirmed or the read-back budget is spent.
+    """
+    if not state.get("is_sufficient"):
+        return "ask_followup"
+    if (
+        _is_voice(state)
+        and state.get("collected")
+        and not state.get("facts_confirmed")
+        and state.get("confirm_count", 0) < MAX_CONFIRMATIONS
+    ):
+        return "confirm_facts"
+    return "conclude"
 
 
 async def ask_followup(state: ClinicState) -> dict:
-    """Write exactly one gentle follow-up question about the missing facts."""
+    """
+    Ask exactly one gentle follow-up question about the missing facts.
+
+    No LLM call of its own: the question was drafted together with the facts
+    in ``extract_symptoms``. If that draft is empty or not a short single
+    question, a template asks for the missing fields instead.
+    """
     missing = state.get("missing_fields") or list(REQUIRED_FIELDS)
     wanted = "、".join(_FIELD_LABELS.get(field, field) for field in missing)
-    question = f"方便再多说一点吗？想了解一下您的{wanted}。"
-
-    llm = get_chat_llm("balanced", streaming=False)
-    try:
-        response = await llm.ainvoke(
-            [
-                SystemMessage(content=FOLLOWUP_SYSTEM_PROMPT),
-                HumanMessage(
-                    content=(
-                        f"已收集到的信息：\n{_format_collected(state.get('collected', {}))}\n\n"
-                        f"还缺少：{wanted}\n\n"
-                        f"对话记录：\n{_format_transcript(state)}"
-                    )
-                ),
-            ]
-        )
-        text = _message_text(response).strip()
-        if text:
-            question = text
-    except Exception as exc:  # pragma: no cover - provider/network dependent
-        print(f"--- [Clinic] follow-up generation failed: {exc} ---", flush=True)
+    question = (state.get("draft_question") or "").strip()
+    if not question or len(question) > MAX_QUESTION_CHARS:
+        question = f"方便再多说一点吗？想了解一下您的{wanted}。"
 
     return {
         "pending_question": question,
+        "draft_question": "",
         "turn_messages": [AIMessage(content=question)],
     }
 
@@ -396,15 +539,41 @@ async def await_answer(state: ClinicState) -> dict:
 
     ``interrupt()`` persists the pending question in the checkpoint; the next
     request on the same ``thread_id`` resumes with ``Command(resume=<answer>)``
-    and the answer re-enters the interview through ``extract_symptoms``.
+    and the answer re-enters the interview through ``emergency_gate``, so a
+    red flag in the answer is caught before anything else runs.
+    The interrupt value is ``{"kind": "followup", "question": …}``;
+    ``main._interrupt_question`` turns it back into the plain SSE text.
     """
     question = state.get("pending_question", "")
-    answer = interrupt(question)
+    answer = interrupt({"kind": "followup", "question": question})
     return {
         "turn_messages": [HumanMessage(content=str(answer))],
         "followup_count": state.get("followup_count", 0) + 1,
         "pending_question": "",
     }
+
+
+async def confirm_facts(state: ClinicState) -> dict:
+    """
+    Voice only: read the collected facts back and wait for a yes or a fix.
+
+    The read-back is a template (``build_readback``), not an LLM call, so what
+    the user hears is exactly what is on the symptom panel. Re-running this
+    node on resume recomputes the same sentence from the same state.
+    """
+    collected = dict(state.get("collected", {}))
+    question = build_readback(collected)
+    answer = str(interrupt({"kind": "confirm", "question": question, "facts": collected}))
+    return {
+        "turn_messages": [AIMessage(content=question), HumanMessage(content=answer)],
+        "confirm_count": state.get("confirm_count", 0) + 1,
+        "facts_confirmed": is_affirmative_answer(answer),
+    }
+
+
+def route_after_confirm(state: ClinicState) -> str:
+    """A plain yes concludes; anything else is a correction re-read through the gate."""
+    return "conclude" if state.get("facts_confirmed") else "emergency_gate"
 
 
 async def _build_system_prompt(state: ClinicState) -> str:
@@ -442,6 +611,9 @@ async def _build_system_prompt(state: ClinicState) -> str:
 
 async def _summarize_recommendation(triage_text: str, state: ClinicState) -> dict:
     """Derive the structured triage card from the ReAct agent's answer."""
+    # Voice: the first line was already spoken; the card must say the same.
+    lead = extract_spoken_lead(triage_text) if _is_voice(state) else ""
+    lead_hint = f"\n\n正文第一句已经念给用户听：「{lead}」。summary 请直接使用这句话。" if lead else ""
     llm = get_chat_llm("precise", streaming=False)
     try:
         result = await llm.with_structured_output(TriageRecommendation).ainvoke(
@@ -450,7 +622,7 @@ async def _summarize_recommendation(triage_text: str, state: ClinicState) -> dic
                 HumanMessage(
                     content=(
                         f"症状要点：\n{_format_collected(state.get('collected', {}))}\n\n"
-                        f"预问诊结论：\n{triage_text}"
+                        f"预问诊结论：\n{triage_text}{lead_hint}"
                     )
                 ),
             ]
@@ -460,8 +632,14 @@ async def _summarize_recommendation(triage_text: str, state: ClinicState) -> dic
         return {}
 
     if isinstance(result, TriageRecommendation):
-        return result.model_dump()
-    return result if isinstance(result, dict) else {}
+        recommendation = result.model_dump()
+    elif isinstance(result, dict):
+        recommendation = dict(result)
+    else:
+        return {}
+    if lead:
+        recommendation["summary"] = lead
+    return recommendation
 
 
 async def conclude(state: ClinicState) -> Command | dict:
@@ -472,6 +650,8 @@ async def conclude(state: ClinicState) -> Command | dict:
     ``Command(graph=Command.PARENT, ...)`` rather than a plain node ``Command``.
     """
     system = await _build_system_prompt(state) + handoff_prompt_section(AGENT_ID)
+    if _is_voice(state):
+        system += VOICE_LEAD_INSTRUCTION
     skill_tools = get_agent_tools(tags=["clinic"])
     agent = create_react_agent(
         get_chat_llm("balanced"),
@@ -523,6 +703,7 @@ def build_clinic_graph() -> StateGraph:
     workflow.add_node("check_sufficiency", check_sufficiency)
     workflow.add_node("ask_followup", ask_followup)
     workflow.add_node("await_answer", await_answer)
+    workflow.add_node("confirm_facts", confirm_facts)
     workflow.add_node("conclude", conclude)
 
     workflow.add_edge(START, "emergency_gate")
@@ -535,10 +716,20 @@ def build_clinic_graph() -> StateGraph:
     workflow.add_conditional_edges(
         "check_sufficiency",
         route_after_sufficiency,
-        {"ask_followup": "ask_followup", "conclude": "conclude"},
+        {
+            "ask_followup": "ask_followup",
+            "confirm_facts": "confirm_facts",
+            "conclude": "conclude",
+        },
     )
     workflow.add_edge("ask_followup", "await_answer")
-    workflow.add_edge("await_answer", "extract_symptoms")
+    # Every answer goes back through the rule gate, not straight to extraction.
+    workflow.add_edge("await_answer", "emergency_gate")
+    workflow.add_conditional_edges(
+        "confirm_facts",
+        route_after_confirm,
+        {"conclude": "conclude", "emergency_gate": "emergency_gate"},
+    )
     workflow.add_edge("conclude", END)
 
     return workflow.compile()

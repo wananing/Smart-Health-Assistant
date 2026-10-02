@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
+import asyncio
 import inspect
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import json
+import os
 from typing import Any
 from uuid import uuid4
 from dotenv import load_dotenv
@@ -22,6 +24,9 @@ from agents.vision import (
     validate_image_upload,
 )
 from observability import configure_observability
+from voice.gateway import GraphBridge, StarletteTransport, serve_voice_call
+from voice.protocol import error_frame
+from voice.providers import SpeechConfigurationError, load_speech_providers
 
 load_dotenv()
 
@@ -47,18 +52,51 @@ async def _close_checkpointer() -> None:
         print(f"--- [API] Checkpointer close failed: {exc} ---", flush=True)
 
 
+async def _warm_knowledge_base() -> None:
+    """Load the RAG index at startup so the first clinic conclusion doesn't pay for it."""
+    import time
+
+    started = time.perf_counter()
+    try:
+        from rag.knowledge_base import get_knowledge_base
+
+        await get_knowledge_base().warm()
+    except Exception as exc:  # never block serving on RAG
+        print(f"--- [RAG] Warm-up failed ({type(exc).__name__}); will retry lazily ---", flush=True)
+        return
+    print(f"--- [RAG] Knowledge base warmed in {time.perf_counter() - started:.1f}s ---", flush=True)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # In the background: serving starts immediately; a request that needs RAG
+    # before warm-up finishes simply waits on the same init lock.
+    warmup = asyncio.create_task(_warm_knowledge_base())
     yield
+    warmup.cancel()
     await _close_checkpointer()
     _observability_runtime.shutdown()
 
 
 app = FastAPI(title="大健康 AI 后端", version="0.4.0", lifespan=lifespan)
 
+# Vite dev servers. Shared by CORS and the /api/voice WebSocket Origin check
+# (CORS does not apply to WebSocket handshakes).
+ALLOWED_ORIGINS = (
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+     "http://localhost:5175",
+
+    "http://127.0.0.1:5175",
+    # Comma-separated extras, e.g. a LAN address when testing on a phone.
+    *(o.strip() for o in os.getenv("EXTRA_ALLOWED_ORIGINS", "").split(",") if o.strip()),
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],  # Vite dev servers
+    allow_origins=list(ALLOWED_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -166,6 +204,7 @@ def _build_initial_state(
     messages: list[ChatMessage],
     user_info: UserInfo | None,
     active_agent: str,
+    channel: str = "text",
 ) -> dict:
     user_info_dict = user_info.model_dump() if user_info else {}
     return {
@@ -174,6 +213,7 @@ def _build_initial_state(
         "next_agent": "",
         "active_agent": active_agent,
         "handoff_count": 0,
+        "channel": channel,
     }
 
 
@@ -275,7 +315,28 @@ async def _resolve_graph_input(
     return full_state
 
 
-async def _stream_agent_events(graph_input: Any, config: dict | None = None):
+def _interrupt_kind(value: Any) -> str | None:
+    if isinstance(value, dict) and isinstance(value.get("kind"), str):
+        return value["kind"]
+    return None
+
+
+async def _iter_agent_events(
+    graph_input: Any,
+    config: dict | None = None,
+    *,
+    custom_types: frozenset[str] | set[str] | None = None,
+):
+    """
+    Translate one graph run into transport-neutral event dicts.
+
+    Consumed by the SSE wrapper below and by the voice gateway. Every dict has
+    the exact shape of the SSE event it becomes; the only extra is ``kind`` on
+    ``interrupt`` events, which the SSE wrapper strips to keep ``/api/chat``
+    byte-for-byte unchanged. ``custom_types`` widens the custom-stream
+    whitelist for a caller that understands more (voice adds ``facts``).
+    """
+    allowed_custom = _STREAMABLE_CUSTOM_TYPES if custom_types is None else custom_types
     seen_interrupts: set[str] = set()
     try:
         print("--- [API] Starting event stream ---", flush=True)
@@ -302,7 +363,7 @@ async def _stream_agent_events(graph_input: Any, config: dict | None = None):
             if kind == "on_chat_model_stream":
                 chunk_content = event["data"]["chunk"].content
                 if chunk_content:
-                    yield _sse_payload({"type": "text", "content": chunk_content})
+                    yield {"type": "text", "content": chunk_content}
 
             # 1b. Root-level stream chunks: custom card/text events pushed by
             #     the agents themselves (agents/streaming.py), plus interrupts.
@@ -314,49 +375,62 @@ async def _stream_agent_events(graph_input: Any, config: dict | None = None):
                 if stream_mode == "custom":
                     if (
                         isinstance(stream_payload, dict)
-                        and stream_payload.get("type") in _STREAMABLE_CUSTOM_TYPES
+                        and stream_payload.get("type") in allowed_custom
                     ):
-                        yield _sse_payload(stream_payload)
+                        yield stream_payload
                 elif stream_mode == "updates" and isinstance(stream_payload, dict):
                     for item in stream_payload.get("__interrupt__", ()) or ():
                         marker = str(getattr(item, "id", "") or id(item))
                         if marker in seen_interrupts:
                             continue
                         seen_interrupts.add(marker)
-                        question = _interrupt_question(getattr(item, "value", item))
-                        yield _sse_payload({"type": "text", "content": question})
-                        yield _sse_payload({"type": "interrupt", "content": question})
+                        value = getattr(item, "value", item)
+                        question = _interrupt_question(value)
+                        yield {"type": "text", "content": question}
+                        interrupt_event = {"type": "interrupt", "content": question}
+                        interrupt_kind = _interrupt_kind(value)
+                        if interrupt_kind:
+                            interrupt_event["kind"] = interrupt_kind
+                        yield interrupt_event
 
             # 2. A graph node is starting (shows agent status in UI)
             elif kind == "on_chain_start":
                 label = _NODE_LABELS.get(node_name)
                 if label:
-                    yield _sse_payload({"type": "node_start", "node": node_name, "content": label})
+                    yield {"type": "node_start", "node": node_name, "content": label}
 
             # 3. A graph node finished
             elif kind == "on_chain_end":
                 if node_name in _NODE_LABELS:
-                    yield _sse_payload({"type": "node_end", "node": node_name})
+                    yield {"type": "node_end", "node": node_name}
 
             # 4. Tool / skill calls
             elif kind == "on_tool_start":
                 tool_name = event.get("name", "tool")
                 label = _SKILL_LABELS.get(tool_name, f"正在调用：{tool_name}")
-                yield _sse_payload({"type": "tool_start", "tool": tool_name, "content": label})
+                yield {"type": "tool_start", "tool": tool_name, "content": label}
 
             elif kind == "on_tool_end":
                 tool_name = event.get("name", "tool")
-                yield _sse_payload({"type": "tool_end", "tool": tool_name})
+                yield {"type": "tool_end", "tool": tool_name}
                 # `card` events are NOT derived here: every card-producing tool
                 # (or its agent node) writes the payload itself through
                 # agents.streaming, and it arrives on the `custom` stream above.
 
         print("--- [API] Event stream finished successfully ---", flush=True)
-        yield 'data: {"type": "finish"}\n\n'
+        yield {"type": "finish"}
 
     except Exception as e:
         print(f"--- [API] Event stream error: {e} ---", flush=True)
-        yield _sse_payload({"type": "error", "content": str(e)})
+        yield {"type": "error", "content": str(e)}
+
+
+async def _stream_agent_events(graph_input: Any, config: dict | None = None):
+    """SSE wrapper around ``_iter_agent_events`` used by the HTTP endpoints."""
+    async for event in _iter_agent_events(graph_input, config):
+        if event.get("type") == "interrupt" and "kind" in event:
+            event = {key: value for key, value in event.items() if key != "kind"}
+        yield _sse_payload(event)
 
 
 @app.get("/")
@@ -456,3 +530,90 @@ async def vision_chat(
             yield _sse_payload({"type": "error", "content": "图片识别失败，请稍后再试"})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ─── /api/voice: real-time voice clinic ──────────────────────────────────────
+
+_speech_providers = None
+
+
+def _get_speech_providers():
+    """Resolve ASR/TTS once (cue audio is cached per provider instance)."""
+    global _speech_providers
+    if _speech_providers is None:
+        _speech_providers = load_speech_providers()
+    return _speech_providers
+
+
+def _build_voice_state(text: str, user_info: dict, channel: str) -> dict:
+    try:
+        parsed = UserInfo(**(user_info or {}))
+    except Exception:
+        parsed = UserInfo()
+    return _build_initial_state(
+        [ChatMessage(role="user", content=text)], parsed, "clinic_agent", channel=channel
+    )
+
+
+async def _get_thread_state(config: dict):
+    return await get_master_app().aget_state(config, subgraphs=True)
+
+
+async def _abandon_pending_run(config: dict) -> None:
+    """
+    Close out a run the voice gateway cancelled (watchdog).
+
+    A cancelled run leaves its step pending in the checkpoint — typically the
+    clinic subgraph still "waiting" on the interrupt it was resuming, with the
+    old answer already bound to it. Resuming that would silently drop the
+    user's next words. Marking the pending node as finished (empty update)
+    makes the next message start a normal turn over the full transcript.
+    """
+    app = get_master_app()
+    snapshot = await app.aget_state(config)
+    for task in getattr(snapshot, "tasks", ()) or ():
+        await app.aupdate_state(config, {"messages": []}, as_node=task.name)
+
+
+def _voice_bridge() -> GraphBridge:
+    # Late-bound lambdas so tests can patch the module-level functions.
+    return GraphBridge(
+        resolve_input=lambda *args: _resolve_graph_input(*args),
+        iter_events=lambda *args, **kwargs: _iter_agent_events(*args, **kwargs),
+        build_state=lambda *args: _build_voice_state(*args),
+        get_state=lambda config: _get_thread_state(config),
+        check_config=lambda: resolve_model_settings(),
+        abandon_run=lambda config: _abandon_pending_run(config),
+    )
+
+
+def _origin_allowed(origin: str | None) -> bool:
+    return origin in ALLOWED_ORIGINS
+
+
+@app.websocket("/api/voice")
+async def voice(websocket: WebSocket):
+    # CORS does not cover WebSocket handshakes: check Origin ourselves.
+    # Closing before accept() makes the server reject the handshake (HTTP 403).
+    origin = websocket.headers.get("origin")
+    if not _origin_allowed(origin):
+        print(f"--- [Voice] Rejected WebSocket origin: {origin!r} ---", flush=True)
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    try:
+        asr, tts = _get_speech_providers()
+    except SpeechConfigurationError as exc:
+        await websocket.send_text(
+            json.dumps(error_frame("fatal", f"语音服务配置错误：{exc}"), ensure_ascii=False)
+        )
+        await websocket.close(code=1011)
+        return
+
+    await serve_voice_call(
+        StarletteTransport(websocket),
+        bridge=_voice_bridge(),
+        asr=asr,
+        tts=tts,
+    )

@@ -36,8 +36,8 @@ class _Structured:
         self._recommendation = recommendation
 
     async def ainvoke(self, _messages):
-        if self._schema is clinic.SymptomFacts:
-            return self._facts
+        if self._schema is clinic.InterviewStep:
+            return clinic.InterviewStep(facts=self._facts)
         return self._recommendation
 
 

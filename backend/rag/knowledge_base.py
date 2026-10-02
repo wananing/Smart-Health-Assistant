@@ -55,6 +55,10 @@ class HealthKnowledgeBase:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._sync_init)
 
+    async def warm(self) -> None:
+        """Load the embedding model and index now instead of on the first query."""
+        await self._ensure_initialized()
+
     def _sync_init(self, *, rebuild: bool = False) -> None:
         """Blocking initialization — called via run_in_executor or directly from CLI."""
         embeddings = get_embeddings()

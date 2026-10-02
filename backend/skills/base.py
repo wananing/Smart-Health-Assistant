@@ -37,10 +37,15 @@ class BaseSkill(ABC):
       description — one-line description shown to the LLM as a tool hint
       tags        — categories (e.g. ['clinic', 'pharmacy']) controlling which
                     agents can auto-load this skill
+    and should declare:
+      input_schema — the Pydantic input model run() validates against
     """
     name: str
     description: str
     tags: list[str] = []
+    # The skill's input model. The registry uses it as the tool's argument
+    # schema, so the LLM passes the fields directly (no JSON-in-a-string).
+    input_schema: type[BaseModel] | None = None
 
     @abstractmethod
     def run(self, **kwargs: Any) -> SkillOutput:

@@ -31,16 +31,24 @@ def _exploding_llm(*args, **kwargs):
 
 
 class _FakeStructuredRunnable:
-    """Stands in for `llm.with_structured_output(schema)`."""
+    """Stands in for `llm.with_structured_output(schema)`.
 
-    def __init__(self, schema, facts_queue: list[SymptomFacts], recommendation):
+    The interview step returns the next fact snapshot plus the scripted
+    follow-up question — empty once the required facts are all there, as the
+    prompt instructs the real model.
+    """
+
+    def __init__(self, schema, facts_queue: list[SymptomFacts], recommendation, followup_text=""):
         self._schema = schema
         self._facts_queue = facts_queue
         self._recommendation = recommendation
+        self._followup_text = followup_text
 
     async def ainvoke(self, _messages):
-        if self._schema is SymptomFacts:
-            return self._facts_queue.pop(0) if self._facts_queue else SymptomFacts()
+        if self._schema is clinic.InterviewStep:
+            facts = self._facts_queue.pop(0) if self._facts_queue else SymptomFacts()
+            missing = clinic._missing_fields(facts.model_dump())
+            return clinic.InterviewStep(facts=facts, next_question=self._followup_text if missing else "")
         return self._recommendation
 
 
@@ -51,7 +59,9 @@ class _FakeLLM:
         self._followup_text = followup_text
 
     def with_structured_output(self, schema):
-        return _FakeStructuredRunnable(schema, self._facts_queue, self._recommendation)
+        return _FakeStructuredRunnable(
+            schema, self._facts_queue, self._recommendation, self._followup_text
+        )
 
     async def ainvoke(self, _messages):
         return AIMessage(content=self._followup_text)
@@ -149,6 +159,51 @@ class CheckSufficiencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route_after_sufficiency({**state, **update}), "conclude")
 
 
+class InterviewStepTests(unittest.IsolatedAsyncioTestCase):
+    """extract_symptoms + ask_followup now share ONE structured LLM call."""
+
+    def test_the_follow_up_rules_survive_in_the_merged_prompt(self):
+        prompt = clinic.INTERVIEW_SYSTEM_PROMPT
+        for rule in ("一个", "40 个字", "不要编号", "不要重复已经问过的问题", "不要给出诊断", "留空"):
+            self.assertIn(rule, prompt)
+
+    async def test_one_call_returns_facts_and_the_drafted_question(self):
+        calls: list = []
+
+        class _Runnable:
+            async def ainvoke(self, messages):
+                calls.append(messages)
+                return clinic.InterviewStep(
+                    facts=SymptomFacts(chief_complaint="咳嗽"), next_question="咳嗽多久了呢？"
+                )
+
+        class _Llm:
+            def with_structured_output(self, schema):
+                assert schema is clinic.InterviewStep
+                return _Runnable()
+
+        state = {"messages": [HumanMessage(content=MILD_TEXT)], "collected": {}}
+        with patch("agents.clinic.get_chat_llm", return_value=_Llm()):
+            update = await clinic.extract_symptoms(state)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(update["collected"]["chief_complaint"], "咳嗽")
+        self.assertEqual(update["draft_question"], "咳嗽多久了呢？")
+
+    async def test_ask_followup_makes_no_llm_call_and_falls_back_to_a_template(self):
+        with patch("agents.clinic.get_chat_llm", side_effect=_exploding_llm):
+            drafted = await clinic.ask_followup(
+                {"missing_fields": ["duration"], "draft_question": "咳嗽多久了呢？"}
+            )
+            empty = await clinic.ask_followup({"missing_fields": ["duration"], "draft_question": ""})
+            rambling = await clinic.ask_followup(
+                {"missing_fields": ["duration"], "draft_question": "问" * (clinic.MAX_QUESTION_CHARS + 1)}
+            )
+        self.assertEqual(drafted["pending_question"], "咳嗽多久了呢？")
+        self.assertEqual(drafted["draft_question"], "")
+        for update in (empty, rambling):
+            self.assertIn("症状持续了多久", update["pending_question"])
+
+
 class ClinicSubgraphFlowTests(unittest.IsolatedAsyncioTestCase):
     """Drives the compiled master graph end to end with fake models."""
 
@@ -213,7 +268,10 @@ class ClinicSubgraphFlowTests(unittest.IsolatedAsyncioTestCase):
             )
 
             self.assertIn("__interrupt__", first)
-            self.assertEqual(first["__interrupt__"][0].value, "咳嗽多久了呢？")
+            self.assertEqual(
+                first["__interrupt__"][0].value,
+                {"kind": "followup", "question": "咳嗽多久了呢？"},
+            )
             # Nothing has been committed to the parent history yet.
             self.assertEqual(len(first["messages"]), 1)
 

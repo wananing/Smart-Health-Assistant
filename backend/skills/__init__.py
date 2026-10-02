@@ -5,7 +5,8 @@ How it works:
   1. On import, scans backend/skills/*/SKILL.md for installed skills
   2. Reads frontmatter (name, description, tags) without executing skill code
   3. Lazily imports the skill class on first use (avoids heavy imports at startup)
-  4. Wraps each skill as a LangChain @tool so ReAct agents can invoke it
+  4. Wraps each skill as a LangChain tool whose argument schema IS the
+     skill's ``input_schema``, so the model passes the fields directly
 
 Agent integration:
   from skills import get_agent_tools
@@ -23,7 +24,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool, tool
 
 from skills.base import BaseSkill
 
@@ -154,13 +155,30 @@ class SkillRegistry:
 
     def get_tool(self, name: str):
         """
-        Return a LangChain @tool function wrapping the named skill.
-        The tool accepts a JSON string of keyword arguments.
+        Return a LangChain tool wrapping the named skill.
+
+        The tool's arguments are the skill's ``input_schema`` fields, passed
+        directly (``{"symptoms_text": "…", "duration_days": 3}``). The old
+        single ``params_json`` string made models send an object or the bare
+        fields instead, fail validation and retry the ReAct loop. A skill
+        without ``input_schema`` keeps the legacy ``params_json`` signature.
         """
         meta = self._meta[name]
         description = meta.get("description", f"Skill: {name}").replace("\n", " ").strip()
 
         registry_ref = self  # capture for closure
+        schema = getattr(self._load_instance(name), "input_schema", None)
+        if schema is not None:
+            async def _run_skill(**kwargs: Any) -> str:
+                result = await registry_ref._load_instance(name).arun(**kwargs)
+                return result.model_dump_json(ensure_ascii=False)
+
+            return StructuredTool.from_function(
+                coroutine=_run_skill,
+                name=name,
+                description=description,
+                args_schema=schema,
+            )
 
         @tool(name, description=description)
         async def _skill_tool(params_json: str = "{}") -> str:
@@ -220,13 +238,14 @@ def get_agent_tools(tags: list[str]) -> list:
 # to pre-load all of them.
 
 @tool
-async def load_skill(skill_name: str, params_json: str = "{}") -> str:
+async def load_skill(skill_name: str, params_json: str | dict = "{}") -> str:
     """
     Load and execute any registered skill by name at runtime.
 
     Args:
         skill_name:  The skill's name (e.g. 'health_calculator', 'symptom_scorer').
-        params_json: A JSON object string with the skill's input parameters.
+        params_json: The skill's input parameters, as an object (or a JSON
+                     object string).
 
     Returns a JSON string with the skill's structured output including
     a 'disclaimer' field that must be shown to the user.
@@ -250,10 +269,15 @@ async def load_skill(skill_name: str, params_json: str = "{}") -> str:
             "available_skills": available,
         }, ensure_ascii=False)
 
-    try:
-        kwargs: dict[str, Any] = json.loads(params_json) if params_json.strip() else {}
-    except json.JSONDecodeError:
-        return json.dumps({"success": False, "error": "params_json is not valid JSON"})
+    if isinstance(params_json, dict):
+        kwargs: dict[str, Any] = params_json
+    else:
+        try:
+            kwargs = json.loads(params_json) if params_json.strip() else {}
+        except json.JSONDecodeError:
+            return json.dumps({"success": False, "error": "params_json is not valid JSON"})
+        if not isinstance(kwargs, dict):
+            return json.dumps({"success": False, "error": "params_json must be a JSON object"})
 
     result = await instance.arun(**kwargs)
     return result.model_dump_json(ensure_ascii=False)

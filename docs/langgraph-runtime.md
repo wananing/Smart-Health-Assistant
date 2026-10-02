@@ -55,24 +55,29 @@ Checkpoint 中会保存完整对话消息与用户资料，属于医疗上下文
 `backend/agents/clinic.py` 编译出的子图被直接挂载为主图的 `clinic_node`，拥有自己的 `ClinicState`：
 
 ```
-emergency_gate ──CRITICAL──────────────────────────────────────────► END
-      │
-      │ 未触发红旗
-      ▼
-extract_symptoms ──► check_sufficiency ──信息充分──► conclude ──► END
-      ▲                     │
-      │                     │ 缺必填项
-      │                     ▼
-      └── await_answer ◄── ask_followup
+┌─► emergency_gate ──CRITICAL──────────────────────────────────────────► END
+│         │
+│         │ 未触发红旗
+│         ▼
+│   extract_symptoms ──► check_sufficiency ──信息充分──► conclude ──► END
+│                          │        │                      ▲
+│                          │        └─仅语音─► confirm_facts ┘ 肯定 / 达到上限
+│                          │ 缺必填项              │
+│                          ▼                       │ 更正
+├── await_answer ◄── ask_followup                  │
+└──────────────────────────────────────────────────┘
 ```
+
+每一次回答（追问的回答、复述确认的更正）都先回到 `emergency_gate`，所以用户在回答追问时说出红旗症状同样会被规则闸门拦下。
 
 | 节点 | 是否调用 LLM | 职责 |
 | --- | --- | --- |
 | `emergency_gate` | 否 | 直接调用 `skills/emergency_triage` 的规则表。命中 CRITICAL 时输出固定安全话术、推送急诊卡片并结束子图，不依赖模型是否愿意调用工具 |
-| `extract_symptoms` | 是（`with_structured_output`） | 抽取 `SymptomFacts`（主诉、部位、持续时间、严重程度、伴随症状等），跨轮合并进 `collected`，空值不覆盖已知值 |
+| `extract_symptoms` | 是（一次 `with_structured_output`） | 一次结构化调用得到 `InterviewStep`：抽取 `SymptomFacts`（主诉、部位、持续时间、严重程度、伴随症状等），跨轮合并进 `collected`，空值不覆盖已知值；同时起草下一个追问 `draft_question`（必填项齐全时为空）。原来"抽取 + 追问"是串行的两次 LLM 调用 |
 | `check_sufficiency` | 否 | 判断必填项 `chief_complaint` / `duration` / `severity` 是否齐全；追问超过 `MAX_FOLLOWUPS`（3 次）强制收尾 |
-| `ask_followup` | 是 | 只生成**一个**温和的追问问题 |
-| `await_answer` | 否 | `interrupt(question)` 挂起整张图 |
+| `ask_followup` | 否 | 直接使用起草好的追问（只问**一个**问题、不超过 40 字等规则写在合并后的提示词里）；草稿为空或过长时用模板追问缺失字段 |
+| `await_answer` | 否 | `interrupt({"kind": "followup", "question": …})` 挂起整张图 |
+| `confirm_facts` | 否 | 仅 `channel == "voice"`：用模板复述 `collected`，`interrupt({"kind": "confirm", …})`；整句肯定语进 `conclude`，其他回答视为更正重新抽取，最多复述 `MAX_CONFIRMATIONS`（2）次 |
 | `conclude` | 是 | ReAct Agent（clinic 技能 + `load_skill` + RAG 注入）产出分诊正文，再用结构化输出压缩成 `TriageRecommendation` |
 
 ### 与父图的契约
@@ -99,10 +104,10 @@ extract_symptoms ──► check_sufficiency ──信息充分──► conclud
 
 ## 追问的中断与恢复
 
-1. `await_answer` 调用 `interrupt(question)`，LangGraph 把问题写入 checkpoint 并结束本次运行。
-2. `main.py` 从流里取出 `__interrupt__`，先发 `{"type": "text", "content": <问题>}`（复用普通气泡，前端无需新组件），再发 `{"type": "interrupt", …}` 作为标记，最后照常发 `finish`。
+1. `await_answer` 调用 `interrupt({"kind": "followup", "question": question})`，LangGraph 把问题写入 checkpoint 并结束本次运行。
+2. `main.py` 从流里取出 `__interrupt__`，先发 `{"type": "text", "content": <问题>}`（复用普通气泡，前端无需新组件），再发 `{"type": "interrupt", …}` 作为标记，最后照常发 `finish`。SSE 里的 `interrupt` 不带 `kind`，与字符串形式的旧值逐字节一致；`main._iter_agent_events` 产出的事件字典带 `kind`，供语音网关使用。
 3. 前端不需要特殊处理，用户在同一个 `thread_id` 上发下一条消息即可。
-4. 后端在 `_resolve_graph_input` 里用 `master_app.aget_state(config).tasks[*].interrupts` 检测挂起状态，命中则用 `Command(resume=<用户回答>)` 恢复；回答会以 `HumanMessage` 回流到 `extract_symptoms`，继续补全信息。
+4. 后端在 `_resolve_graph_input` 里用 `master_app.aget_state(config).tasks[*].interrupts` 检测挂起状态，命中则用 `Command(resume=<用户回答>)` 恢复；回答会以 `HumanMessage` 先经过 `emergency_gate`，再回流到 `extract_symptoms` 继续补全信息。
 
 如果用户在追问挂起期间说出退出词（退出/结束/不看了/取消…），后端不会把它当成回答：`_resolve_graph_input` 返回 `None`，端点随即换一个新的 `thread_id` 并用完整历史重跑，让 router 正常识别退出意图。退出词表由 `agents/router.py` 的 `EXIT_PHRASES` / `is_exit_request()` 统一提供。
 

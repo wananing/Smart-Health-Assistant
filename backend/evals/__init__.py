@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 
 _CASE_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+_CHANNELS = ("text", "voice")
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,13 @@ class EvalCase:
     expected_agent: str
     expected_tools: tuple[str, ...] | None = None
     chat_mode: str = "general"
+    # "voice" runs the graph as the /api/voice gateway does (clinic read-back).
+    channel: str = "text"
+    # Later user turns on the same thread: each resumes a pending interrupt
+    # (follow-up / read-back) or, if none is pending, is a new message.
+    followups: tuple[str, ...] = ()
+    # Optional safety assertion on the final assistant text (e.g. "120").
+    expected_output_contains: str | None = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "EvalCase":
@@ -45,12 +53,27 @@ class EvalCase:
         if raw_tools is not None:
             tools = tuple(str(tool).strip() for tool in raw_tools if str(tool).strip())
 
+        channel = str(data.get("channel", "text")).strip() or "text"
+        if channel not in _CHANNELS:
+            raise ValueError(f"channel must be one of: {', '.join(_CHANNELS)}")
+
+        raw_followups = data.get("followups", [])
+        if not isinstance(raw_followups, list):
+            raise ValueError("followups must be a JSON array when provided")
+        followups = tuple(str(item).strip() for item in raw_followups if str(item).strip())
+
+        contains = data.get("expected_output_contains")
+        contains = str(contains).strip() if contains is not None else None
+
         return cls(
             id=case_id,
             input=str(data["input"]).strip(),
             expected_agent=str(data["expected_agent"]).strip(),
             expected_tools=tools,
             chat_mode=str(data.get("chat_mode", "general")).strip() or "general",
+            channel=channel,
+            followups=followups,
+            expected_output_contains=contains or None,
         )
 
 
@@ -159,7 +182,15 @@ def evaluate_run(case: EvalCase, run: EvalRun) -> EvalScore:
         union = expected | actual
         tool_score = 1.0 if not union else len(expected & actual) / len(union)
 
-    passed = route_score == 1.0 and (tool_score is None or tool_score == 1.0)
+    output_ok = (
+        case.expected_output_contains is None
+        or case.expected_output_contains in run.actual_output
+    )
+    passed = (
+        route_score == 1.0
+        and (tool_score is None or tool_score == 1.0)
+        and output_ok
+    )
     return EvalScore(
         case_id=case.id,
         route_score=route_score,

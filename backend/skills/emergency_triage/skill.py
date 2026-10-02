@@ -114,6 +114,7 @@ _SAFETY_MESSAGES = {
 
 class EmergencyTriageSkill(BaseSkill):
     name = "emergency_triage"
+    input_schema = EmergencyTriageInput
     description = (
         "对用户描述的症状做第一道安全检查，快速识别危急/紧急/一般情况，"
         "输出必须展示给用户的安全提示。应在clinic_agent所有其他处理之前优先调用。"

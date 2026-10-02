@@ -162,6 +162,7 @@ class MedicationCalcOutput(SkillOutput):
 
 class MedicationCalculatorSkill(BaseSkill):
     name = "medication_calculator"
+    input_schema = MedicationCalcInput
     description = (
         "根据患者体重和年龄，计算常见药物的推荐剂量和最大日剂量，"
         "标注处方/非处方属性、妊娠安全分级和肾功能调整建议。"

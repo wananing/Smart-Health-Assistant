@@ -105,6 +105,7 @@ def _parse_duration(text: str) -> float | None:
 
 class SymptomScorerSkill(BaseSkill):
     name = "symptom_scorer"
+    input_schema = SymptomScorerInput
     description = (
         "对用户描述的症状进行结构化评分（0-100）和分诊定色（红/黄/绿）。"
         "输出包括触发的红色预警症状、推荐就诊优先级和建议等待时长。"
