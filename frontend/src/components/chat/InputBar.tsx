@@ -71,6 +71,10 @@ const InputBar: React.FC<InputBarProps> = ({
     };
 
     const attachmentOptions = getAttachmentOrder(chatMode).map(scanType => ATTACHMENT_OPTIONS[scanType]);
+    // The voice call is a clinic triage call, so it is only offered where the user
+    // could mean that: the home chat and the clinic. Elsewhere (insurance, pharmacy,
+    // reports) a phone button would start a symptom interview they didn't ask for.
+    const offerVoiceCall = chatMode === 'general' || chatMode === 'clinic';
 
     return (
         <div className="flex items-center gap-2.5">
@@ -148,15 +152,17 @@ const InputBar: React.FC<InputBarProps> = ({
                     <Send size={16} />
                 </button>
             </div>
-            <button
-                type="button"
-                onClick={openVoiceCall}
-                aria-label="语音问诊通话"
-                title="打电话问诊"
-                className={`${isElderMode ? 'w-14 h-14' : 'w-12 h-12'} shrink-0 rounded-full bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-raised flex items-center justify-center hover:to-brand-800 active:scale-[0.94] transition duration-fast`}
-            >
-                <Phone size={isElderMode ? 24 : 20} fill="currentColor" strokeWidth={0} />
-            </button>
+            {offerVoiceCall && (
+                <button
+                    type="button"
+                    onClick={openVoiceCall}
+                    aria-label="语音问诊通话"
+                    title="打电话问诊"
+                    className={`${isElderMode ? 'w-14 h-14' : 'w-12 h-12'} shrink-0 rounded-full bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-raised flex items-center justify-center hover:to-brand-800 active:scale-[0.94] transition duration-fast`}
+                >
+                    <Phone size={isElderMode ? 24 : 20} fill="currentColor" strokeWidth={0} />
+                </button>
+            )}
         </div>
     );
 };
