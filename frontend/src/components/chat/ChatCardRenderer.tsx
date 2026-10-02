@@ -329,7 +329,7 @@ const ReportAnalysisCard: FC<{ data: Record<string, unknown> }> = ({ data }) => 
                                     <div className="flex-1 min-w-0">
                                         <div className={`font-semibold text-ink-900 ${t.body}`}>
                                             {f.full_name || f.name}
-                                            {f.full_name && f.full_name !== f.name && <span className="font-normal text-ink-500"> {f.name}</span>}
+                                            {f.full_name && f.full_name !== f.name && <span className="font-normal text-ink-500 whitespace-nowrap"> {f.name}</span>}
                                         </div>
                                         {f.reference && <div className={`text-ink-600 ${t.caption}`}>参考 {f.reference}</div>}
                                     </div>

@@ -1,4 +1,5 @@
 import type { FC } from 'react';
+import { Check } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTextScale } from '../../design/textScale';
 
@@ -34,7 +35,9 @@ const VitalCard: FC<VitalCardProps> = ({ title, tone, icon: Icon, value, unit, s
                 <span className={`font-semibold text-ink-900 tabular-nums ${t.headline}`}>{value}</span>
                 <span className={`text-ink-600 ${t.caption}`}>{unit}</span>
             </div>
-            <div className={`mt-2 inline-flex rounded-full bg-success-50 px-2.5 py-0.5 text-success-800 ${t.caption}`}>{status}</div>
+            <div className={`mt-2 inline-flex items-center gap-1 rounded-full bg-ink-50 px-2.5 py-0.5 text-ink-700 ring-1 ring-inset ring-ink-200 ${t.caption}`}>
+                <Check size={12} strokeWidth={3} className="text-success-600" />{status}
+            </div>
         </div>
     );
 };

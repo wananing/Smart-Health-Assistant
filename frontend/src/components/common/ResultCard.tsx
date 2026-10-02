@@ -1,4 +1,5 @@
 import type { FC, ReactNode } from 'react';
+import { Check } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTextScale } from '../../design/textScale';
 
@@ -10,9 +11,12 @@ import { useTextScale } from '../../design/textScale';
 
 export type Tone = 'brand' | 'success' | 'warning' | 'danger' | 'neutral';
 
+// success is deliberately quiet: a neutral pill with a green check. A green pill
+// would read like the teal brand chips next to it, and "fine" should not compete
+// with what needs attention (warning / danger).
 const BADGE_TONES: Record<Tone, string> = {
     brand: 'bg-brand-50 text-brand-800 ring-brand-200',
-    success: 'bg-success-50 text-success-800 ring-success-100',
+    success: 'bg-ink-50 text-ink-700 ring-ink-200',
     warning: 'bg-warning-50 text-warning-800 ring-warning-200',
     danger: 'bg-danger-50 text-danger-700 ring-danger-200',
     neutral: 'bg-ink-50 text-ink-700 ring-ink-200',
@@ -61,6 +65,7 @@ export const Badge: FC<{ tone?: Tone; children: ReactNode }> = ({ tone = 'neutra
     const t = useTextScale();
     return (
         <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 font-semibold ring-1 ring-inset ${t.caption} ${BADGE_TONES[tone]}`}>
+            {tone === 'success' && <Check size={12} strokeWidth={3} className="text-success-600" />}
             {children}
         </span>
     );
@@ -68,7 +73,7 @@ export const Badge: FC<{ tone?: Tone; children: ReactNode }> = ({ tone = 'neutra
 
 const VALUE_TONES: Record<Tone, string> = {
     brand: 'text-brand-800',
-    success: 'text-success-700',
+    success: 'text-ink-900',
     warning: 'text-warning-700',
     danger: 'text-danger-700',
     neutral: 'text-ink-900',
