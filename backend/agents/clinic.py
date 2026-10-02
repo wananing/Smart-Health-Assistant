@@ -49,9 +49,14 @@ containing ONLY the messages produced during this turn (see ``_replace``).
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, Literal, Sequence, TypedDict
+from typing import Annotated, Any, Literal, Optional, Sequence, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
+
+# Node signatures spell the config parameter ``Optional[RunnableConfig]``: with
+# postponed annotations LangGraph matches the annotation *string* and only
+# injects the config for "RunnableConfig" / "Optional[RunnableConfig]".
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
@@ -316,8 +321,20 @@ def _missing_fields(collected: dict) -> list[str]:
     return [field for field in REQUIRED_FIELDS if not collected.get(field)]
 
 
-def _is_voice(state: ClinicState) -> bool:
-    return state.get("channel") == "voice"
+def _channel(state: ClinicState, config: RunnableConfig | None = None) -> str:
+    """
+    The channel of *this request*. Callers put it in the run config
+    (``configurable.channel``) on every run, including ``Command(resume=…)``,
+    so a voice call that hung up on a read-back and is answered from the text
+    chat continues as text. The state's ``channel`` (checkpointed at the
+    start of the interview) is only a fallback for callers that don't set it.
+    """
+    configured = ((config or {}).get("configurable") or {}).get("channel")
+    return str(configured or state.get("channel") or "text")
+
+
+def _is_voice(state: ClinicState, config: RunnableConfig | None = None) -> bool:
+    return _channel(state, config) == "voice"
 
 
 def is_affirmative_answer(text: str) -> bool:
@@ -478,16 +495,19 @@ async def extract_symptoms(state: ClinicState) -> dict:
     }
 
 
-async def check_sufficiency(state: ClinicState) -> dict:
+async def check_sufficiency(state: ClinicState, config: Optional[RunnableConfig] = None) -> dict:
     """Deterministic gate: are all required fields present (or out of retries)?"""
     collected = state.get("collected", {})
     missing = _missing_fields(collected)
     exhausted = state.get("followup_count", 0) >= MAX_FOLLOWUPS
-    if _is_voice(state):
+    channel = _channel(state, config)
+    if channel == "voice":
         # Drives the voice call's symptom panel; the text channel never sees it
         # (main._STREAMABLE_CUSTOM_TYPES does not forward "facts" over SSE).
         _emit({"type": "facts", "collected": dict(collected), "missing": missing})
     return {
+        # Routing below reads the request's channel, not the checkpointed one.
+        "channel": channel,
         "missing_fields": missing,
         "is_sufficient": not missing or exhausted,
     }
@@ -609,10 +629,10 @@ async def _build_system_prompt(state: ClinicState) -> str:
     return system
 
 
-async def _summarize_recommendation(triage_text: str, state: ClinicState) -> dict:
+async def _summarize_recommendation(triage_text: str, state: ClinicState, *, voice: bool = False) -> dict:
     """Derive the structured triage card from the ReAct agent's answer."""
     # Voice: the first line was already spoken; the card must say the same.
-    lead = extract_spoken_lead(triage_text) if _is_voice(state) else ""
+    lead = extract_spoken_lead(triage_text) if voice else ""
     lead_hint = f"\n\n正文第一句已经念给用户听：「{lead}」。summary 请直接使用这句话。" if lead else ""
     llm = get_chat_llm("precise", streaming=False)
     try:
@@ -642,7 +662,7 @@ async def _summarize_recommendation(triage_text: str, state: ClinicState) -> dic
     return recommendation
 
 
-async def conclude(state: ClinicState) -> Command | dict:
+async def conclude(state: ClinicState, config: Optional[RunnableConfig] = None) -> Command | dict:
     """
     ReAct triage answer + structured ``clinic_recommendation`` card.
 
@@ -650,7 +670,8 @@ async def conclude(state: ClinicState) -> Command | dict:
     ``Command(graph=Command.PARENT, ...)`` rather than a plain node ``Command``.
     """
     system = await _build_system_prompt(state) + handoff_prompt_section(AGENT_ID)
-    if _is_voice(state):
+    voice = _is_voice(state, config)
+    if voice:
         system += VOICE_LEAD_INSTRUCTION
     skill_tools = get_agent_tools(tags=["clinic"])
     agent = create_react_agent(
@@ -686,7 +707,7 @@ async def conclude(state: ClinicState) -> Command | dict:
         "messages": [*state.get("turn_messages", []), *produced],
     }
     if triage_text:
-        recommendation = await _summarize_recommendation(triage_text, state)
+        recommendation = await _summarize_recommendation(triage_text, state, voice=voice)
         if recommendation:
             update["recommendation"] = recommendation
             _emit(_clinic_card(recommendation))

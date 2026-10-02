@@ -32,7 +32,7 @@ uv run python -m unittest test_llm.py test_vision.py test_main_config.py test_ob
 uv run python -m unittest test_clinic_graph.py test_graph_build.py   # clinic subgraph + checkpointer wiring
 uv run python -m unittest test_handoff.py test_cards.py                # Command handoffs + agent-emitted cards
 uv run python -m unittest test_skill_tools.py                          # skill tool argument schemas
-uv run python -m unittest test_voice_protocol.py test_voice_providers.py test_voice_render.py test_voice_gateway.py test_voice_clinic.py test_voice_volc_protocol.py  # voice gateway (fake ASR/TTS)
+uv run python -m unittest test_voice_protocol.py test_voice_providers.py test_voice_render.py test_voice_gateway.py test_voice_clinic.py test_voice_volc_protocol.py test_voice_runs.py  # voice gateway (fake ASR/TTS)
 uv run python -m unittest test_llm.py                                  # one file
 uv run python -m unittest test_llm.ModelSettingsTests.test_legacy_ark_configuration_remains_the_default  # one test
 
@@ -123,7 +123,7 @@ All providers are OpenAI-compatible and selected by `LLM_PROVIDER` (`ark` defaul
 
 ### Frontend state
 
-`store/GlobalContext.tsx` (`useGlobalStore`) owns `chatMode`, `messages`, `isElderMode`, scanner state, `threadId`, and `enterChatMode()`/`exitChatMode()`, which insert the `mode_welcome`/`mode_exit` cards. `threadId` is adopted from the backend `session` event; while it is set, `chatService.ts` sends only the newest message. `exitChatMode()` (and `resetThread()`) clears it, starting a fresh server-side conversation. `screens/` are full-page views per mode; `HomeScreen` hosts the chat (`GlobalChatView` → `AgentStatusBubble` + `ChatCardRenderer`, `InputBar`). The backend URL `http://localhost:8000` is hardcoded in `chatService.ts`; backend CORS allows only `localhost:5173` and `5174`.
+`store/GlobalContext.tsx` (`useGlobalStore`) owns `chatMode`, `messages`, `isElderMode`, `threadId`, the voice call's open state (`openVoiceCall()`/`closeVoiceCall()`), and `enterChatMode()`/`exitChatMode()`, which insert the `mode_welcome`/`mode_exit` cards. `threadId` is adopted from the backend `session` event; while it is set, `chatService.ts` sends only the newest message. `exitChatMode()` (and `resetThread()`) clears it, starting a fresh server-side conversation. Specialist modes live inside the chat; `screens/` holds only `Home` (the chat), `Dashboard` (health data) and `Clinic/VoiceCallScreen` (the call overlay). `HomeScreen` hosts the chat (`GlobalChatView` → `AgentStatusBubble` + `ChatCardRenderer`, `InputBar`). The backend URL `http://localhost:8000` is hardcoded in `chatService.ts`; backend CORS (`ALLOWED_ORIGINS` in `main.py`) allows the Vite dev ports 5173, 5174 and 5175 on both `localhost` and `127.0.0.1`, plus any comma-separated origins in `EXTRA_ALLOWED_ORIGINS` (e.g. a LAN address for phone testing). The same list is the Origin check of the `/api/voice` WebSocket, which CORS does not cover.
 
 ### RAG (`backend/rag/`)
 

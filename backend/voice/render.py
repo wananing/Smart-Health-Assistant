@@ -84,7 +84,15 @@ _UNITS = {
 _UNIT_RE = re.compile(r"(?<=\d)\s*(mmHg|mg|kg|mL|ml|cm|°C|℃|g)(?![A-Za-z])")
 _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 _RANGE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[-~～—]\s*(\d+(?:\.\d+)?)")
-_HOTLINE_RE = re.compile(r"(?<![\d./])(120|110|119)(?![\d./%])")
+# 120/110/119 are read digit by digit (幺二零) only when the context makes
+# them a phone number: after a calling word ("拨打120", "急救电话120",
+# "报警请打110") or right before 急救/救护车/报警/火警. Everywhere else —
+# doses, heart rates, ranges, counts — they are ordinary numbers.
+_HOTLINE_BEFORE_RE = re.compile(
+    r"(?P<pre>(?:拨打|拨|打|呼叫|叫|急救电话|报警电话|火警电话|电话|报警|火警|急救)(?:电话)?(?:是|为)?\s*)"
+    r"(?P<num>120|110|119)(?![\d.%/])"
+)
+_HOTLINE_AFTER_RE = re.compile(r"(?<![\d.\-~～—/])(?P<num>120|110|119)(?=\s*(?:急救|救护车|报警|火警))")
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 _YEAR_RE = re.compile(r"(?<![\d.])(\d{4})(?=年)")
 
@@ -153,7 +161,11 @@ def strip_markup(text: str) -> str:
 def normalize_for_speech(text: str) -> str:
     """Strip markup and emoji, then spell numbers, units and hotlines as read."""
     text = strip_markup(text)
-    text = _HOTLINE_RE.sub(lambda m: "".join(_HOTLINE_DIGITS[int(d)] for d in m.group(1)), text)
+    def hotline(number: str) -> str:
+        return "".join(_HOTLINE_DIGITS[int(d)] for d in number)
+
+    text = _HOTLINE_BEFORE_RE.sub(lambda m: m.group("pre") + hotline(m.group("num")), text)
+    text = _HOTLINE_AFTER_RE.sub(lambda m: hotline(m.group("num")), text)
     text = _PERCENT_RE.sub(lambda m: "百分之" + read_number(m.group(1)), text)
     text = _RANGE_RE.sub(lambda m: f"{m.group(1)}到{m.group(2)}", text)
     text = _UNIT_RE.sub(lambda m: _UNITS[m.group(1)], text)

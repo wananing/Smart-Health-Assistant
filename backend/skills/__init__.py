@@ -4,9 +4,13 @@ Skill Registry — auto-discovery, loading, and LangChain tool wrapping.
 How it works:
   1. On import, scans backend/skills/*/SKILL.md for installed skills
   2. Reads frontmatter (name, description, tags) without executing skill code
-  3. Lazily imports the skill class on first use (avoids heavy imports at startup)
+  3. Imports a skill's code only when an agent first asks for its tools (or
+     calls it through ``load_skill``) — nothing heavy at startup
   4. Wraps each skill as a LangChain tool whose argument schema IS the
-     skill's ``input_schema``, so the model passes the fields directly
+     skill's ``input_schema``, so the model passes the fields directly. That
+     needs the skill class, so building the tool imports it; a skill that
+     fails to import is logged once and left out of the tool list, and the
+     other skills keep working
 
 Agent integration:
   from skills import get_agent_tools
@@ -97,6 +101,7 @@ class SkillRegistry:
     def __init__(self) -> None:
         self._meta: dict[str, dict] = {}       # name → frontmatter dict
         self._instances: dict[str, BaseSkill] = {}  # name → skill instance (lazy)
+        self._failed: set[str] = set()         # skills that failed to load (logged once)
         self._scan()
 
     def _scan(self) -> None:
@@ -167,7 +172,15 @@ class SkillRegistry:
         description = meta.get("description", f"Skill: {name}").replace("\n", " ").strip()
 
         registry_ref = self  # capture for closure
-        schema = getattr(self._load_instance(name), "input_schema", None)
+        try:
+            instance = self._load_instance(name)
+        except Exception as exc:
+            # Failure isolation: one broken skill must not take the node down.
+            if name not in self._failed:
+                self._failed.add(name)
+                print(f"--- [Skills] '{name}' failed to load ({type(exc).__name__}); skipped ---", flush=True)
+            return None
+        schema = getattr(instance, "input_schema", None)
         if schema is not None:
             async def _run_skill(**kwargs: Any) -> str:
                 result = await registry_ref._load_instance(name).arun(**kwargs)
@@ -203,7 +216,9 @@ class SkillRegistry:
         for meta in self._meta.values():
             skill_tags = meta.get("tags", [])
             if any(t in skill_tags for t in tags):
-                tools.append(self.get_tool(meta["name"]))
+                built = self.get_tool(meta["name"])
+                if built is not None:
+                    tools.append(built)
         return tools
 
 

@@ -32,14 +32,12 @@ from agents.vision import redact_sensitive_text
 from voice import protocol as proto
 from voice.arbiter import Arbiter, Outbox, Speaker, SpeechJob, Transport, Utterance
 from voice.asr import DEFAULT_HOTWORDS, AsrEvent, AsrProvider, AsrStream, SpeechProviderError
-from voice.cues import CueCache, shared_cue_cache
-from voice.render import LeadCutter, RunOutcome, SpeechPlan, plan_for_outcome, plan_interrupt
+from voice.cues import CUE_TEXTS, CueCache, shared_cue_cache
+from voice.render import LeadCutter, SpeechPlan, plan_for_outcome, plan_interrupt
+from voice.runs import DETACHED_RUNS, VOICE_CUSTOM_TYPES, RunManager, wait_detached
 from voice.shortcuts import classify, is_affirmative_answer, is_backchannel, meaningful_length
 from voice.tts import TtsProvider
 from voice.turns import CallState, NoHearLadder, TurnTrace, VoiceTimings, endpoint_wait
-
-# Custom-stream types the voice channel understands on top of card/text.
-VOICE_CUSTOM_TYPES = frozenset({"card", "text", "facts"})
 
 # Graph events forwarded to the client in their SSE shape.
 _FORWARDED_EVENTS = {"text", "card", "node_start", "node_end", "tool_start", "tool_end"}
@@ -132,15 +130,14 @@ class VoiceCall:
         self._speech_active = False
         self._speech_started_at: float | None = None
 
-        # Graph run in flight.
-        self._run_task: asyncio.Task | None = None
-        self._run_token = 0
-        self._run_turn: TurnTrace | None = None
-        self._outcome = RunOutcome()
-        # The conclusion's first sentence, spoken while the body still streams.
-        self._lead: LeadCutter | None = None
-        self._lead_spoken = False
-        self._buffered: list[tuple[str, TurnTrace]] = []
+        # Graph runs: lifecycle, watchdog and buffered input (voice/runs.py).
+        self.runs = RunManager(
+            bridge=bridge,
+            timings=self.timings,
+            post=self.inbox.put,
+            set_timer=self._set_timer,
+            cancel_timer=self._cancel_timer,
+        )
         self.pending_interrupt: dict | None = None
 
         # Screen state mirrored for the symptom panel and the summary card.
@@ -178,6 +175,10 @@ class VoiceCall:
             self._tasks.append(asyncio.create_task(self._asr_pump()))
             assert self.speaker is not None
             self._tasks.append(asyncio.create_task(self.speaker.run()))
+            # Cue audio for this voice/speed, safety line first; in the
+            # background so the greeting is not delayed by it.
+            assert self.cues is not None
+            self._tasks.append(asyncio.create_task(self.cues.warm()))
             await self._greet()
             while not self.ended:
                 item = await self.inbox.get()
@@ -230,6 +231,7 @@ class VoiceCall:
             notify=self._on_speaker_event,
             speed=speed,
             receipts=self.receipts,
+            new_turn_id=lambda: next(self._turn_ids),
         )
 
         await self._send(proto.session_frame(self.thread_id))
@@ -247,6 +249,12 @@ class VoiceCall:
 
     async def _greet(self) -> None:
         """Opening cue, or — on reconnect — the pending question again."""
+        if self.thread_id in DETACHED_RUNS:
+            # The previous connection's run is still writing this thread:
+            # wait for its result instead of racing it.
+            await self._set_state("thinking")
+            await wait_detached(self.thread_id)
+            await self._set_state("listening")
         pending = await self._pending_from_checkpoint()
         turn = self._new_turn("system")
         if pending is not None:
@@ -293,8 +301,11 @@ class VoiceCall:
         for _, task in self._timers.values():
             task.cancel()
         self._timers.clear()
-        if self._run_task is not None:
-            await self._cancel_run()  # e.g. the socket dropped mid-turn
+        if self.runs.active:
+            # Not a deliberate end (those cancelled the run already): the socket
+            # dropped or the call failed. Let the run finish in the background
+            # so its result is in the checkpoint for a reconnect.
+            await self.runs.detach(self.thread_id)
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -410,11 +421,11 @@ class VoiceCall:
             self._timers.pop(name, None)
             await self._on_timer(name)
         elif kind == "graph_event":
-            if item[1] == self._run_token:
+            if self.runs.is_current(item[1]):
                 await self._on_graph_event(item[2])
         elif kind == "graph_done":
-            if item[1] == self._run_token:
-                await self._on_graph_done(item[2])
+            if self.runs.is_current(item[1]):
+                await self._on_graph_done(item[1], item[2])
         elif kind == "speaker":
             await self._on_speaker(item[1], item[2], item[3])
         elif kind == "asr_failed":
@@ -439,7 +450,7 @@ class VoiceCall:
             return
         if self.speaker is not None and not self.speaker.idle:
             return
-        if self._run_task is not None:
+        if self.runs.active:
             await self._set_state("thinking")
             return
         await self._set_state("listening")
@@ -487,17 +498,15 @@ class VoiceCall:
         speak_mode: str = "cue",
     ) -> SpeechJob | None:
         assert self.cues is not None and self.speaker is not None
-        cue = await self.cues.get(cue_id)
-        if cue.pcm is None:
-            await self._notify_degraded(trace)
-            if terminal:
-                self._finish_turn(trace, "done")
-            return None
+        # Never wait for synthesis here (this runs in the dispatch loop): a cue
+        # that is not cached yet is synthesised live by the speaker task.
+        cue = self.cues.peek(cue_id)
+        utterance = Utterance(cue.text, cue.pcm) if cue is not None else Utterance(CUE_TEXTS[cue_id])
         if trace is not None and terminal:
             trace.speak_mode = speak_mode
         job = SpeechJob(
             turn_id=trace.turn_id if trace else 0,
-            utterances=[Utterance(cue.text, cue.pcm)],
+            utterances=[utterance],
             trace=trace,
             interruptible=interruptible,
             cue=True,
@@ -525,9 +534,7 @@ class VoiceCall:
     async def _stop_speaking(self) -> SpeechJob | None:
         """Bump the generation, drop queued speech, tell the client to flush."""
         assert self.speaker is not None
-        current = self.arbiter.current
-        self.arbiter.bump()
-        self.speaker.clear()
+        current = self.speaker.stop()
         if current is not None:
             await self._send(proto.tts_stop_frame(current.turn_id))
         return current
@@ -756,7 +763,7 @@ class VoiceCall:
 
     async def _not_heard(self, trace: TurnTrace) -> None:
         """Empty / low-confidence final: never enters the graph."""
-        if self._run_task is not None:
+        if self.runs.active:
             # The user already has an answer coming; ignore the noise quietly.
             self._finish_turn(trace, "superseded")
             return
@@ -795,10 +802,10 @@ class VoiceCall:
             await self._repeat(trace)
             return
 
-        if self._run_task is not None:
+        if self.runs.active:
             # Committed too early: the running turn is not cancelled; this text
             # becomes the next input as soon as the run returns.
-            self._buffered.append((text, trace))
+            self.runs.buffer(text, trace)
             return
         await self._start_run(text, trace)
 
@@ -837,86 +844,54 @@ class VoiceCall:
     # ─── graph runs ───────────────────────────────────────────────────────
 
     async def _start_run(self, text: str, trace: TurnTrace) -> None:
-        self._run_token += 1
-        token = self._run_token
-        self._run_turn = trace
-        self._outcome = RunOutcome()
-        self._lead = None
-        self._lead_spoken = False
         if trace.committed_at is None:
             trace.committed_at = self._now()
+        self.runs.start(text, trace, thread_id=self.thread_id, user_info=self.user_info)
         if self.state != "emergency":
             await self._set_state("thinking")
             self._set_timer("filler", self.timings.filler_after)
-        # No-progress watchdog (re-armed by every graph event) + a hard cap.
-        self._set_timer("graph_timeout", self.timings.graph_stall)
-        self._set_timer("graph_deadline", self.timings.graph_max)
-        self._run_task = asyncio.create_task(self._run_graph(text, token))
 
-    async def _run_graph(self, text: str, token: int) -> None:
-        config = {"configurable": {"thread_id": self.thread_id}}
-        state = self._bridge.build_state(text, self.user_info, "voice")
-        try:
-            graph_input = await self._bridge.resolve_input(config, state, state, text)
-            if graph_input is None:
-                graph_input = state
-            async for event in self._bridge.iter_events(
-                graph_input, config, custom_types=VOICE_CUSTOM_TYPES
-            ):
-                await self.inbox.put(("graph_event", token, event))
-            await self.inbox.put(("graph_done", token, None))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            print(f"--- [Voice] Graph run failed: {type(exc).__name__} ---", flush=True)
-            await self.inbox.put(("graph_done", token, "error"))
-
-    async def _cancel_run(self) -> None:
-        """Cancel the graph run and close out the step it left pending."""
-        task = self._run_task
-        if task is None:
-            return
-        task.cancel()
-        self._run_task = None
-        self._run_token += 1  # late events of the cancelled run are ignored
-        await asyncio.gather(task, return_exceptions=True)
-        self.pending_interrupt = None
-        if self._bridge.abandon_run is not None:
-            try:
-                await self._bridge.abandon_run({"configurable": {"thread_id": self.thread_id}})
-            except Exception as exc:  # pragma: no cover - checkpointer dependent
-                print(f"--- [Voice] Could not close out the cancelled run: {type(exc).__name__} ---", flush=True)
+    async def _run_buffered(self) -> bool:
+        """Feed buffered user turns as the next run. True if one started."""
+        taken = self.runs.take_buffered()
+        if taken is None:
+            return False
+        text, trace, earlier = taken
+        for superseded in earlier:
+            self._finish_turn(superseded, "superseded")
+        await self._start_run(text, trace)
+        return True
 
     async def _send_facts(self) -> None:
         self.facts_version += 1
         await self._send(proto.facts_frame(dict(self.collected), list(self.missing), self.facts_version))
 
     async def _on_graph_event(self, event: dict) -> None:
+        run = self.runs.current
+        assert run is not None
         event_type = event.get("type")
-        if self._run_task is not None:
-            self._set_timer("graph_timeout", self.timings.graph_stall)  # progress
+        self.runs.progress()  # any event re-arms the no-progress watchdog
         if event_type in _FORWARDED_EVENTS:
             await self._send(dict(event))
             if event_type == "node_start" and event.get("node") == "conclude":
-                self._lead = LeadCutter()
-            elif event_type == "text" and self._lead is not None and not self._lead.done:
+                run.lead = LeadCutter()
+            elif event_type == "text" and run.lead is not None and not run.lead.done:
                 await self._maybe_speak_lead(str(event.get("content") or ""))
             if event_type == "card":
                 payload = event.get("payload") or {}
                 if payload.get("type") == "clinic_recommendation":
                     data = dict(payload.get("data") or {})
                     self.recommendation = data
-                    self._outcome.recommendation = data
+                    run.outcome.recommendation = data
                     if data.get("urgency") == "emergency" and self.state != "emergency":
-                        assert self._run_turn is not None
-                        await self._take_over(self._run_turn, ())
+                        await self._take_over(run.trace, ())
             elif event_type == "node_start" and event.get("node") in _HANDOFF_NODES:
-                self._outcome.handed_off = True
+                run.outcome.handed_off = True
         elif event_type == "interrupt":
             kind = str(event.get("kind") or "followup")
             question = str(event.get("content") or "")
-            self._outcome.interrupt_kind = kind
-            self._outcome.interrupt_question = question
+            run.outcome.interrupt_kind = kind
+            run.outcome.interrupt_question = question
             self.pending_interrupt = {"kind": kind, "question": question}
             await self._send({"type": "interrupt", "content": question, "kind": kind})
         elif event_type == "facts":
@@ -924,30 +899,30 @@ class VoiceCall:
             self.missing = list(event.get("missing") or [])
             await self._send_facts()
         elif event_type == "error":
-            self._outcome.error = "graph"
+            run.outcome.error = "graph"
             await self._send(proto.error_frame("transient", "抱歉，处理出了点问题"))
         # "finish" is implied by graph_done.
 
     async def _maybe_speak_lead(self, chunk: str) -> None:
         """Speak the conclusion's first sentence as soon as it is complete."""
-        assert self._lead is not None
-        plan = self._lead.feed(chunk)
+        run = self.runs.current
+        assert run is not None and run.lead is not None
+        plan = run.lead.feed(chunk)
         if plan is None or plan.speak_mode != "conclusion":
             return  # undecided, or no usable lead → the card's summary later
-        if self.state == "emergency" or self._buffered or self._run_turn is None:
+        if self.state == "emergency" or self.runs.buffered:
             return
         if self._speech_active and self._current_text().strip():
             return  # the user is talking; the screen has it
-        self._lead_spoken = True
-        await self._speak_plan(plan, self._run_turn)
+        run.lead_spoken = True
+        await self._speak_plan(plan, run.trace)
 
-    async def _on_graph_done(self, error: str | None) -> None:
-        self._run_task = None
-        self._cancel_timer("filler", "graph_timeout", "graph_deadline")
-        trace = self._run_turn
-        outcome = self._outcome
-        self._run_turn = None
-        assert trace is not None
+    async def _on_graph_done(self, token: int, error: str | None) -> None:
+        run = self.runs.complete(token)
+        if run is None:
+            return
+        self._cancel_timer("filler")
+        trace, outcome = run.trace, run.outcome
         if outcome.interrupt_kind is None:
             self.pending_interrupt = None
 
@@ -957,43 +932,34 @@ class VoiceCall:
             if trace.speak_mode != "safety":
                 trace.speak_mode = "skipped"
                 self._finish_turn(trace, "done")
-            if self._buffered:
-                await self._run_buffered()
+            await self._run_buffered()
             return
 
         if error or outcome.error:
             trace.error_class = "transient"
             self._finish_turn(trace, "error")
-            self._buffered.clear()
-            await self._speak_cue("slow", self._new_turn("system"), terminal=True)
+            # Committed speech is never dropped: if the user said more while
+            # this run failed, that is the next turn; otherwise apologise.
+            if not await self._run_buffered():
+                await self._speak_cue("slow", self._new_turn("system"), terminal=True)
             return
 
         user_still_talking = self._speech_active and bool(self._current_text().strip())
-        if self._buffered or user_still_talking:
+        if self.runs.buffered or user_still_talking:
             # The user kept talking after an early endpoint: what the run
             # produced stays on screen; the buffered words answer it instead.
             trace.speak_mode = "skipped"
             self._finish_turn(trace, "superseded")
-            if self._buffered:
-                await self._run_buffered()
-            else:
+            if not await self._run_buffered():
                 await self._settle()
             return
 
-        if self._lead_spoken and outcome.interrupt_kind is None:
+        if run.lead_spoken and outcome.interrupt_kind is None:
             # The conclusion was already spoken from the stream's first sentence.
             await self._settle()
             return
         await self._speak_plan(plan_for_outcome(outcome), trace)
         await self._settle()
-
-    async def _run_buffered(self) -> None:
-        texts = [text for text, _ in self._buffered]
-        trace = self._buffered[-1][1]
-        for _, earlier in self._buffered[:-1]:
-            self._finish_turn(earlier, "superseded")
-        self._buffered.clear()
-        await self._start_run("，".join(texts), trace)
 
     # ─── timers ───────────────────────────────────────────────────────────
 
@@ -1003,8 +969,9 @@ class VoiceCall:
             if self.state != "emergency" and not self.manual_commit and has_text:
                 await self._commit("vad")
         elif name == "filler":
+            run = self.runs.current
             if (
-                self._run_task is not None
+                run is not None
                 and self.state == "thinking"
                 and self.speaker is not None
                 and self.speaker.idle
@@ -1012,30 +979,31 @@ class VoiceCall:
             ):
                 # Only long silent runs (such as conclude) get a prompt that the
                 # answer is still coming; short turns stay silent while thinking.
-                await self._speak_cue("filler_wait", self._run_turn, terminal=False)
-            if self._run_task is not None:
+                await self._speak_cue("filler_wait", run.trace, terminal=False)
+            if self.runs.active:
                 self._set_timer("filler", self.timings.filler_repeat)
         elif name in ("graph_timeout", "graph_deadline"):
-            if self._run_task is None:
+            if not self.runs.active:
                 return
-            self._cancel_timer("filler", "graph_timeout", "graph_deadline")
-            await self._cancel_run()
-            trace = self._run_turn
-            self._run_turn = None
-            if trace is not None:
-                trace.error_class = "stalled" if name == "graph_timeout" else "deadline"
-                self._finish_turn(trace, "error")
-            self._buffered.clear()
+            self._cancel_timer("filler")
+            run = await self.runs.cancel(self.thread_id)
+            self.pending_interrupt = None
+            if run is not None:
+                run.trace.error_class = "stalled" if name == "graph_timeout" else "deadline"
+                self._finish_turn(run.trace, "error")
+            # Committed speech is never dropped: buffered turns run next.
+            if await self._run_buffered():
+                return
             if self.state != "emergency":
                 await self._speak_cue("slow", self._new_turn("system"), terminal=True)
                 await self._settle()
         elif name == "idle_prompt":
-            if self.state == "listening" and self._run_task is None and not self._current_text():
+            if self.state == "listening" and not self.runs.active and not self._current_text():
                 self._idle_prompted = True
                 await self._speak_cue("still_there", self._new_turn("system"), terminal=True)
                 self._set_timer("idle_end", self.timings.idle_end)
         elif name == "idle_end":
-            if self.state in ("listening", "speaking") and self._run_task is None and not self._current_text():
+            if self.state in ("listening", "speaking") and not self.runs.active and not self._current_text():
                 await self._end_call("idle")
 
     # ─── ending ───────────────────────────────────────────────────────────
@@ -1055,9 +1023,14 @@ class VoiceCall:
             return
         self.end_reason = reason
         self.close_code = 1000 if reason in ("bye", "exit", "idle") else 1011
-        if self._run_task is not None:
-            await self._cancel_run()
-            self._finish_turn(self._run_turn, "superseded")
+        if self.runs.active and reason in ("bye", "exit", "idle"):
+            # A deliberate end: stop the run; its pending step is closed out
+            # with the turn's Q&A kept. Any other end (ASR lost, socket
+            # dropped) detaches it in _shutdown so its result is kept.
+            run = await self.runs.cancel(self.thread_id)
+            self.pending_interrupt = None
+            if run is not None:
+                self._finish_turn(run.trace, "superseded")
         self._cancel_timer("endpoint", "filler", "graph_timeout", "graph_deadline", "idle_prompt", "idle_end")
         current = await self._stop_speaking()
         if current is not None and current.terminal:

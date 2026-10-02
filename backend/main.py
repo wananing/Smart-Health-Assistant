@@ -87,8 +87,7 @@ ALLOWED_ORIGINS = (
     "http://localhost:5174",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
-     "http://localhost:5175",
-
+    "http://localhost:5175",
     "http://127.0.0.1:5175",
     # Comma-separated extras, e.g. a LAN address when testing on a phone.
     *(o.strip() for o in os.getenv("EXTRA_ALLOWED_ORIGINS", "").split(",") if o.strip()),
@@ -452,7 +451,7 @@ async def chat(request: ChatRequest):
 
     active_agent = _MODE_TO_AGENT.get(request.chat_mode, "advisor_agent")
     thread_id = (request.thread_id or "").strip() or uuid4().hex
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": thread_id, "channel": "text"}}
     full_state = _build_initial_state(request.messages, request.user_info, active_agent)
     turn_state = _build_initial_state(request.messages[-1:], request.user_info, active_agent)
     user_text = _latest_user_text(request.messages)
@@ -465,7 +464,7 @@ async def chat(request: ChatRequest):
             # The user left mid-interview: abandon the suspended thread so the
             # router gets to see the exit phrase on a clean conversation.
             active_thread_id = uuid4().hex
-            active_config = {"configurable": {"thread_id": active_thread_id}}
+            active_config = {"configurable": {"thread_id": active_thread_id, "channel": "text"}}
             graph_input = full_state
         yield _sse_payload({"type": "session", "thread_id": active_thread_id})
         async for payload in _stream_agent_events(graph_input, active_config):
@@ -493,7 +492,7 @@ async def vision_chat(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     resolved_thread_id = thread_id.strip() or uuid4().hex
-    config = {"configurable": {"thread_id": resolved_thread_id}}
+    config = {"configurable": {"thread_id": resolved_thread_id, "channel": "text"}}
 
     async def event_generator():
         try:
@@ -561,18 +560,23 @@ async def _get_thread_state(config: dict):
 
 async def _abandon_pending_run(config: dict) -> None:
     """
-    Close out a run the voice gateway cancelled (watchdog).
+    Close out a run the voice gateway had to cancel (stall / hard cap).
 
     A cancelled run leaves its step pending in the checkpoint — typically the
     clinic subgraph still "waiting" on the interrupt it was resuming, with the
     old answer already bound to it. Resuming that would silently drop the
-    user's next words. Marking the pending node as finished (empty update)
-    makes the next message start a normal turn over the full transcript.
+    user's next words, so the pending node is marked finished. What the
+    subgraph had already produced this turn (its ``turn_messages``: follow-up
+    questions, answers, the read-back) is written to the parent history with
+    it, so the next message starts a normal turn over the full transcript and
+    the interview continues where it stopped.
     """
     app = get_master_app()
-    snapshot = await app.aget_state(config)
+    snapshot = await app.aget_state(config, subgraphs=True)
     for task in getattr(snapshot, "tasks", ()) or ():
-        await app.aupdate_state(config, {"messages": []}, as_node=task.name)
+        sub_values = getattr(getattr(task, "state", None), "values", None)
+        kept = list(sub_values.get("turn_messages") or []) if isinstance(sub_values, dict) else []
+        await app.aupdate_state(config, {"messages": kept}, as_node=task.name)
 
 
 def _voice_bridge() -> GraphBridge:

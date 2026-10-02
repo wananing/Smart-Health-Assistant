@@ -373,6 +373,101 @@ class EmergencyTests(unittest.IsolatedAsyncioTestCase):
             await harness.stop()
 
 
+class CueWarmUpTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_safety_line_still_plays_when_tts_dies_after_warm_up(self):
+        bridge = ScriptedBridge([[recommendation_card("请立即拨打120", "emergency")]])
+        tts = FakeTtsProvider(ms_per_char=2.0)
+        harness = CallHarness(bridge, tts=tts)
+        await harness.start()
+        try:
+            # Warmed in the background at call start, safety line first.
+            await harness.transport.wait_for(lambda: harness.call.cues.peek("safety") is not None)
+            tts.fail = True  # the vendor goes down mid-call
+            harness.transport.client({"type": "input.text", "text": "我突然剧烈胸痛，一直冒大汗"})
+            await harness.transport.wait_for(lambda: harness.transport.client_heard(SAFETY))
+        finally:
+            await harness.stop()
+
+    async def test_an_uncached_cue_never_blocks_the_dispatch_loop(self):
+        from voice.cues import CueCache
+
+        class _NoWarm(CueCache):
+            async def warm(self, *args, **kwargs):
+                return None  # simulate warm-up still in progress
+
+        bridge = ScriptedBridge([followup(QUESTION)])
+        tts = FakeTtsProvider(ms_per_char=2.0)
+        harness = CallHarness(bridge, tts=tts)
+        harness.call._cue_factory = lambda provider, speed: _NoWarm(provider, speed=speed)
+        await harness.start()
+        try:
+            tts.gate = asyncio.Event()  # synthesis now stalls after its first chunk
+            harness.transport.client({"type": "turn.end", "source": "button"})  # → "没听清" cue
+            harness.transport.client({"type": "input.text", "text": "我头疼"})
+            await harness.transport.wait_for(lambda: bridge.inputs == ["我头疼"], timeout=1.0)
+            tts.gate.set()
+        finally:
+            await harness.stop()
+
+
+class StoppedTurnIdTests(unittest.IsolatedAsyncioTestCase):
+    """Once a turn id was stopped, nothing may be spoken under it again —
+    the client drops every sentence/audio with turn_id <= the stopped id."""
+
+    async def test_emergency_card_while_the_lead_plays_is_still_heard(self):
+        hold = asyncio.Event()
+        lead = "建议您今天去神经内科看看。"
+        bridge = ScriptedBridge([[
+            {"type": "node_start", "node": "conclude", "content": "正在生成分诊建议…"},
+            {"type": "text", "content": lead},
+            {"type": "text", "content": "\n正文……"},
+            hold,
+            recommendation_card("建议立即急诊。", "emergency"),
+        ]])
+        tts = FakeTtsProvider(ms_per_char=60.0)  # the lead plays for ~1 s
+        harness = CallHarness(bridge, tts=tts)
+        await harness.start()
+        try:
+            harness.transport.client({"type": "input.text", "text": "我头晕得厉害"})
+            await harness.transport.wait_for(lambda: lead in harness.transport.spoken_texts())
+            await harness.wait_state("speaking")
+            hold.set()  # emergency card arrives while the lead is playing
+            await harness.transport.wait_for(lambda: harness.transport.json_frames("tts.stop"))
+            await harness.transport.wait_for(lambda: harness.transport.client_heard(SAFETY), timeout=5.0)
+            stopped = harness.transport.json_frames("tts.stop")[0]["turn_id"]
+            safety = next(f for f in harness.transport.json_frames("tts.sentence") if f["text"] == SAFETY)
+            self.assertGreater(safety["turn_id"], stopped)
+        finally:
+            await harness.stop()
+
+    async def test_a_tap_during_the_filler_does_not_silence_the_answer(self):
+        from dataclasses import replace
+
+        hold = asyncio.Event()
+        bridge = ScriptedBridge([[hold, *followup(QUESTION)]])
+        tts = FakeTtsProvider(ms_per_char=60.0)
+        harness = CallHarness(bridge, tts=tts, timings=replace(TEST_TIMINGS, filler_after=0.02))
+        await harness.start()
+        try:
+            harness.transport.client({"type": "input.text", "text": "我头疼"})
+            await harness.transport.wait_for(lambda: CUE_TEXTS["filler_wait"] in harness.transport.spoken_texts())
+            await harness.wait_state("speaking")
+            harness.transport.client({"type": "turn.end", "source": "button"})  # tap = barge-in
+            await harness.transport.wait_for(lambda: harness.transport.json_frames("tts.stop"))
+            hold.set()
+            await harness.transport.wait_for(lambda: QUESTION in harness.transport.spoken_texts())
+            await harness.transport.wait_for(lambda: harness.transport.client_heard(QUESTION), timeout=5.0)
+            stopped = max(f["turn_id"] for f in harness.transport.json_frames("tts.stop"))
+            for frame in harness.transport.frames[
+                next(i for i, f in enumerate(harness.transport.frames)
+                     if isinstance(f, dict) and f.get("type") == "tts.stop"):
+            ]:
+                if isinstance(frame, dict) and frame.get("type") == "tts.sentence":
+                    self.assertGreater(frame["turn_id"], stopped, "spoke under a stopped turn id")
+        finally:
+            await harness.stop()
+
+
 class ConclusionSpeechTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_summary_is_spoken_with_pointer_and_disclaimer(self):
         bridge = ScriptedBridge([[

@@ -9,6 +9,12 @@ Output arbitration: generations, a single speaker, interruptibility, receipts.
   late after ``tts.stop`` can never reach the client.
 * **Single speaker.** One ``Speaker`` task plays queued ``SpeechJob``s in
   order; nothing else sends audio.
+* **A stopped turn stays silent.** ``Speaker.stop()`` is the only way to cut
+  speech and remembers the highest turn id it told the client to stop. The
+  client drops every sentence and audio frame with ``turn_id <=`` that id,
+  so ``enqueue`` gives any later job at or below it a fresh turn id
+  (``new_turn_id``). Callers never have to know whether "their" turn was
+  stopped — the emergency line or a follow-up spoken after a tap is heard.
 * **Interruptible or not.** The emergency safety line is not; every sentence
   is also protected for its first ``protect_window`` seconds.
 * **Receipts.** With ``playback_receipts`` the speaker waits for the client's
@@ -165,6 +171,7 @@ class Speaker:
         notify: SpeakerEvent,
         speed: float = 1.0,
         receipts: bool = False,
+        new_turn_id: Callable[[], int] | None = None,
     ) -> None:
         self._outbox = outbox
         self._arbiter = arbiter
@@ -177,15 +184,34 @@ class Speaker:
         self._sentence_ids = itertools.count(1)
         self._ended: dict[tuple[int, int], asyncio.Event] = {}
         self._played_ms: dict[int, int] = {}
+        self._new_turn_id = new_turn_id or itertools.count(1_000_000).__next__
+        # Highest turn id the client was told to stop (it then drops <= this).
+        self.stopped_turn = -1
 
     @property
     def sample_rate(self) -> int:
         return self._tts.capabilities.sample_rate
 
     def enqueue(self, job: SpeechJob) -> SpeechJob:
+        if job.turn_id <= self.stopped_turn:
+            # The client would drop it: speak under a fresh, higher turn id.
+            job.turn_id = self._new_turn_id()
         job.generation = self._arbiter.generation
         self._queue.put_nowait(job)
         return job
+
+    def stop(self) -> SpeechJob | None:
+        """
+        Cut whatever is playing and drop the queue. Returns the job that was
+        playing (the caller sends ``tts.stop`` for its turn id); from now on
+        that id and every lower one are never spoken under again.
+        """
+        current = self._arbiter.current
+        self._arbiter.bump()
+        self.clear()
+        if current is not None:
+            self.stopped_turn = max(self.stopped_turn, current.turn_id)
+        return current
 
     def clear(self) -> None:
         """Drop queued jobs (the caller bumps the generation for the current one)."""

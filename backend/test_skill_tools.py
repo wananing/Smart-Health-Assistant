@@ -65,6 +65,40 @@ class SkillToolSchemaTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(bad["success"])
 
 
+class SkillFailureIsolationTests(unittest.TestCase):
+    def _registry_with_a_broken_skill(self):
+        from pathlib import Path
+
+        from skills import SkillRegistry
+
+        registry = SkillRegistry()
+        registry._meta["broken_skill"] = {
+            "name": "broken_skill",
+            "description": "always fails to import",
+            "tags": ["clinic"],
+            "_dir": Path("/nonexistent/broken_skill"),
+        }
+        return registry
+
+    def test_one_broken_skill_does_not_take_down_the_others(self):
+        import contextlib
+        import io
+
+        registry = self._registry_with_a_broken_skill()
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            first = registry.get_agent_tools(tags=["clinic"])
+            second = registry.get_agent_tools(tags=["clinic"])
+        names = {tool.name for tool in first}
+        self.assertIn("symptom_scorer", names)
+        self.assertNotIn("broken_skill", names)
+        self.assertEqual({tool.name for tool in second}, names)
+        self.assertEqual(log.getvalue().count("broken_skill"), 1, "logged once")
+
+    def test_a_broken_skill_tool_on_its_own_is_none(self):
+        self.assertIsNone(self._registry_with_a_broken_skill().get_tool("broken_skill"))
+
+
 class EmbeddingLoadTests(unittest.TestCase):
     def _kwargs(self, cached: bool):
         from rag import embeddings

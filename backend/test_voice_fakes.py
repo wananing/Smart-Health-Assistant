@@ -83,6 +83,38 @@ class FakeTransport:
                 out.append((index, turn_id, sentence_id, seq))
         return out
 
+    def client_played(self) -> tuple[list[str], dict[int, int]]:
+        """
+        What the browser client would actually play, applying its rule from
+        ``voiceService.ts``: after ``tts.stop{turn_id}`` it drops every
+        ``tts.sentence`` and audio frame whose ``turn_id <= stoppedTurn``.
+        Returns (sentence texts kept, audio frame count per kept sentence_id).
+        """
+        stopped = -1
+        texts: list[str] = []
+        audio: dict[int, int] = {}
+        kept_sentences: set[int] = set()
+        for frame in self.frames:
+            if isinstance(frame, dict):
+                if frame.get("type") == "tts.stop":
+                    stopped = max(stopped, frame["turn_id"])
+                elif frame.get("type") == "tts.sentence" and frame["turn_id"] > stopped:
+                    texts.append(frame["text"])
+                    kept_sentences.add(frame["sentence_id"])
+            elif isinstance(frame, bytes) and len(frame) >= DOWNLINK_HEADER.size:
+                turn_id, sentence_id, _, _ = unpack_downlink_audio(frame)
+                if turn_id > stopped and sentence_id in kept_sentences:
+                    audio[sentence_id] = audio.get(sentence_id, 0) + 1
+        return texts, audio
+
+    def client_heard(self, text: str) -> bool:
+        """The client kept the sentence and received audio for it."""
+        texts, audio = self.client_played()
+        if text not in texts:
+            return False
+        ids = [f["sentence_id"] for f in self.json_frames("tts.sentence") if f["text"] == text]
+        return any(audio.get(i) for i in ids)
+
     def spoken_texts(self) -> list[str]:
         return [f["text"] for f in self.json_frames("tts.sentence")]
 
@@ -133,6 +165,7 @@ class ScriptedBridge:
         self.graph_inputs: list[Any] = []
         self.snapshot = snapshot or _Snapshot()
         self.pending = False
+        self.abandoned: list[dict] = []
 
     def bridge(self) -> GraphBridge:
         return GraphBridge(
@@ -143,7 +176,11 @@ class ScriptedBridge:
             },
             get_state=self._get_state,
             check_config=None,
+            abandon_run=self._abandon,
         )
+
+    async def _abandon(self, config):
+        self.abandoned.append(config)
 
     async def _get_state(self, _config):
         return self.snapshot
@@ -165,6 +202,8 @@ class ScriptedBridge:
             if isinstance(item, (int, float)):
                 await asyncio.sleep(item)  # a slow step
                 continue
+            if isinstance(item, Exception):
+                raise item  # the graph run fails here
             if item.get("type") == "interrupt":
                 self.pending = True
             yield item

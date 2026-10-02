@@ -48,7 +48,7 @@ async def _execute_case(case: EvalCase):
     }
     # The graph is compiled with a checkpointer; give every case its own thread
     # so no state leaks between cases or between runs.
-    config = {"configurable": {"thread_id": f"eval-{case.id}-{uuid4().hex}"}}
+    config = {"configurable": {"thread_id": f"eval-{case.id}-{uuid4().hex}", "channel": case.channel}}
     with using_attributes(
         session_id=f"eval:{case.id}",
         tags=["evaluation"],

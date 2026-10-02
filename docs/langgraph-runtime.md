@@ -77,7 +77,7 @@ Checkpoint 中会保存完整对话消息与用户资料，属于医疗上下文
 | `check_sufficiency` | 否 | 判断必填项 `chief_complaint` / `duration` / `severity` 是否齐全；追问超过 `MAX_FOLLOWUPS`（3 次）强制收尾 |
 | `ask_followup` | 否 | 直接使用起草好的追问（只问**一个**问题、不超过 40 字等规则写在合并后的提示词里）；草稿为空或过长时用模板追问缺失字段 |
 | `await_answer` | 否 | `interrupt({"kind": "followup", "question": …})` 挂起整张图 |
-| `confirm_facts` | 否 | 仅 `channel == "voice"`：用模板复述 `collected`，`interrupt({"kind": "confirm", …})`；整句肯定语进 `conclude`，其他回答视为更正重新抽取，最多复述 `MAX_CONFIRMATIONS`（2）次 |
+| `confirm_facts` | 否 | 仅语音通道（本次请求 config 里的 `configurable.channel == "voice"`，不从 checkpoint 继承）：用模板复述 `collected`，`interrupt({"kind": "confirm", …})`；整句肯定语进 `conclude`，其他回答视为更正重新抽取，最多复述 `MAX_CONFIRMATIONS`（2）次 |
 | `conclude` | 是 | ReAct Agent（clinic 技能 + `load_skill` + RAG 注入）产出分诊正文，再用结构化输出压缩成 `TriageRecommendation` |
 
 ### 与父图的契约

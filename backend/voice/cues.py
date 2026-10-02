@@ -36,6 +36,10 @@ CUE_TEXTS: dict[str, str] = {
 }
 
 
+# Warmed before anything else at call start.
+WARM_FIRST: tuple[str, ...] = ("safety",)
+
+
 @dataclass(frozen=True)
 class Cue:
     cue_id: str
@@ -70,9 +74,19 @@ class CueCache:
                 self._audio[cue_id] = b"".join(chunks)
         return Cue(cue_id, text, self._audio[cue_id])
 
-    async def warm(self) -> None:
-        """Synthesise every cue; failures are left for the next ``get``."""
-        for cue_id in CUE_TEXTS:
+    def peek(self, cue_id: str) -> Cue | None:
+        """The cached cue, or None while it is not synthesised (never waits)."""
+        audio = self._audio.get(cue_id)
+        return Cue(cue_id, CUE_TEXTS[cue_id], audio) if audio is not None else None
+
+    async def warm(self, first: tuple[str, ...] = WARM_FIRST) -> None:
+        """
+        Synthesise every cue, ``first`` ones first (the safety line must be
+        ready before it can be needed). Failures are left for a later warm-up;
+        meanwhile an uncached cue is spoken by live synthesis instead.
+        """
+        order = [*first, *(cue_id for cue_id in CUE_TEXTS if cue_id not in first)]
+        for cue_id in order:
             await self.get(cue_id)
 
 

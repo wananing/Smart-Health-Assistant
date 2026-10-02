@@ -37,6 +37,31 @@ class NormalisationTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(normalize_for_speech(raw), spoken)
 
+    def test_hotlines_are_read_as_hotlines_only_in_context(self):
+        hotline = {
+            "请立即拨打120": "请立即拨打幺二零",
+            "马上打120叫救护车": "马上打幺二零叫救护车",
+            "急救电话120": "急救电话幺二零",
+            "报警请打110": "报警请打幺幺零",
+            "火警电话是119": "火警电话是幺幺九",
+            "呼叫120": "呼叫幺二零",
+            "120急救车会来": "幺二零急救车会来",
+        }
+        number = {
+            "布洛芬120mg": "布洛芬一百二十毫克",
+            "心率120次": "心率一百二十次",
+            "100-120": "一百到一百二十",
+            "心率100-120次": "心率一百到一百二十次",
+            "血压120/80mmHg": "血压一百二十/八十毫米汞柱",
+            "喝了120毫升": "喝了一百二十毫升",
+            "体重110斤": "体重一百一十斤",
+            "共119人": "共一百一十九人",
+        }
+        for table in (hotline, number):
+            for raw, spoken in table.items():
+                with self.subTest(raw=raw):
+                    self.assertEqual(normalize_for_speech(raw), spoken)
+
     def test_sentences_split_on_final_punctuation(self):
         self.assertEqual(split_sentences("好的。还有吗？没有了"), ["好的。", "还有吗？", "没有了"])
 
