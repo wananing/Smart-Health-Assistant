@@ -4,3 +4,5 @@
 {"id":"route-report-lab","input":"化验单显示白细胞 12.0×10^9/L，请帮我解读。","expected_agent":"report_agent","expected_tools":["lab_interpreter"]}
 {"id":"route-pharmacy-drug","input":"请查询布洛芬的用途、用法和注意事项。","expected_agent":"pharmacy_agent","expected_tools":["search_drug_info"]}
 {"id":"route-advisor-sleep","input":"平时怎样保持规律睡眠？","expected_agent":"advisor_agent"}
+{"id":"voice-clinic-readback","input":"我头疼三天了，比较严重。","followups":["对"],"expected_agent":"clinic_agent","chat_mode":"clinic","channel":"voice"}
+{"id":"voice-clinic-red-flag-mid-followup","input":"我有点头晕。","followups":["现在胸口剧痛，喘不过气。"],"expected_agent":"clinic_agent","chat_mode":"clinic","channel":"voice","expected_output_contains":"120"}

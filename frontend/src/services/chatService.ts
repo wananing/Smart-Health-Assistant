@@ -1,14 +1,5 @@
 import type { ChatMessage, AgentStep, ChatMode, ChatCardPayload, ThreadId } from '../types';
-
-/** Maps LangGraph node names to ChatMode strings */
-const NODE_TO_CHAT_MODE: Record<string, ChatMode> = {
-    clinic_node: 'clinic',
-    insurance_node: 'insurance',
-    report_node: 'report',
-    pharmacy_node: 'pharmacy',
-    // advisor_node returning 'general' signals the user is exiting a specialized mode
-    advisor_node: 'general',
-};
+import { dispatchStreamEvent, type StreamEvent } from './streamEvents';
 
 export interface ChatServiceOptions {
     onChunk: (text: string) => void;
@@ -40,9 +31,6 @@ export interface UserInfoPayload {
 
 export type VisionScanType = 'report' | 'drug_box' | 'trace_code';
 
-let _stepCounter = 0;
-const genStepId = () => `step-${++_stepCounter}-${Date.now()}`;
-
 const consumeSseResponse = async (response: Response, options: ChatServiceOptions) => {
     if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -73,75 +61,14 @@ const consumeSseResponse = async (response: Response, options: ChatServiceOption
                 if (!jsonStr) continue;
 
                 try {
-                    const data = JSON.parse(jsonStr);
-
-                    switch (data.type) {
-                        case 'session':
-                            if (options.onSession && data.thread_id) {
-                                options.onSession(data.thread_id as ThreadId);
-                            }
-                            break;
-
-                        case 'interrupt':
-                            options.onInterrupt?.(data.content ?? '');
-                            break;
-
-                        case 'text':
-                            options.onChunk(data.content ?? '');
-                            break;
-
-                        case 'node_start': {
-                            const step: AgentStep = {
-                                id: genStepId(),
-                                type: 'node_start',
-                                node: data.node,
-                                content: data.content ?? `进入节点：${data.node}`,
-                                isFinished: false,
-                            };
-                            options.onStep(step);
-                            // Automatically switch chatMode based on which agent node started
-                            console.log('[chatService] node_start:', data.node, '→ mode:', NODE_TO_CHAT_MODE[data.node] ?? '(no mapping)');
-                            if (data.node && NODE_TO_CHAT_MODE[data.node] && options.onModeChange) {
-                                console.log('[chatService] calling onModeChange:', NODE_TO_CHAT_MODE[data.node]);
-                                options.onModeChange(NODE_TO_CHAT_MODE[data.node]);
-                            }
-                            break;
-                        }
-
-                        case 'node_end':
-                            options.onStepFinish(data.node ?? '');
-                            break;
-
-                        case 'tool_start': {
-                            const step: AgentStep = {
-                                id: genStepId(),
-                                type: 'tool_start',
-                                tool: data.tool,
-                                content: data.content ?? `调用工具：${data.tool}`,
-                                isFinished: false,
-                            };
-                            options.onStep(step);
-                            break;
-                        }
-
-                        case 'tool_end':
-                            options.onStepFinish(data.tool ?? '');
-                            break;
-
-                        case 'card':
-                            if (options.onCard && data.payload) {
-                                options.onCard(data.payload as ChatCardPayload);
-                            }
-                            break;
-
-                        case 'finish':
-                            done = true;
-                            break;
-
-                        case 'error':
-                            options.onError(new Error(data.content ?? '未知错误'));
-                            done = true;
-                            break;
+                    const data = JSON.parse(jsonStr) as StreamEvent;
+                    if (data.type === 'finish') {
+                        done = true;
+                    } else if (data.type === 'error') {
+                        options.onError(new Error(data.content ?? '未知错误'));
+                        done = true;
+                    } else {
+                        dispatchStreamEvent(data, options);
                     }
                 } catch {
                     // Ignore malformed JSON lines

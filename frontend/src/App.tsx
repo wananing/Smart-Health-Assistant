@@ -6,10 +6,10 @@ import { GlobalProvider, useGlobalStore } from './store/GlobalContext';
 // Layout
 import MobileWrapper from './components/layout/MobileWrapper';
 import BottomNav from './components/layout/BottomNav';
-import ScannerOverlay from './components/layout/ScannerOverlay';
 
 // Core chat components
 import HomeScreen from './screens/Home/HomeScreen';
+import VoiceCallScreen from './screens/Clinic/VoiceCallScreen';
 
 // Admin screens that still have standalone value (accessible from settings/links)
 import DashboardScreen from './screens/Dashboard/DashboardScreen';
@@ -32,11 +32,17 @@ const ScreenRouter = () => {
 };
 
 const AppContent = () => {
+  const { isVoiceCallOpen } = useGlobalStore();
+
   return (
     <MobileWrapper>
-      <ScreenRouter />
-      <BottomNav />
-      <ScannerOverlay />
+      {/* While the call is open the app underneath is out of reach: no focus, not read out */}
+      <div className="contents" inert={isVoiceCallOpen} aria-hidden={isVoiceCallOpen || undefined}>
+        <ScreenRouter />
+        <BottomNav />
+      </div>
+      {/* The voice clinic call covers everything, including the bottom nav */}
+      {isVoiceCallOpen && <VoiceCallScreen />}
     </MobileWrapper>
   );
 };

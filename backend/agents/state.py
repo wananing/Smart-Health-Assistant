@@ -29,3 +29,8 @@ class MainAgentState(TypedDict):
     # Reset to 0 by router_node and capped by handoff.MAX_HANDOFFS_PER_TURN so
     # two specialists cannot transfer the same message back and forth forever.
     handoff_count: int
+
+    # Which I/O channel produced this turn: "text" (default, /api/chat) or
+    # "voice" (/api/voice). Only the clinic subgraph reads it, to add the
+    # spoken read-back confirmation; text-channel behaviour is unchanged.
+    channel: str

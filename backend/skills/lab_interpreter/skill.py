@@ -92,6 +92,7 @@ class LabInterpreterOutput(SkillOutput):
 
 class LabInterpreterSkill(BaseSkill):
     name = "lab_interpreter"
+    input_schema = LabInterpreterInput
     description = (
         "解读用户提供的化验单数值，逐项对比参考范围，标注偏高/偏低/正常，"
         "并给出每项指标的临床意义说明。支持血常规、血生化、甲功、凝血等常见项目。"

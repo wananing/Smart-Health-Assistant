@@ -36,8 +36,25 @@ def get_embeddings() -> Embeddings:
         from langchain_huggingface import HuggingFaceEmbeddings
 
         hf_model = model or "BAAI/bge-small-zh-v1.5"
+        model_kwargs: dict = {"device": "cpu"}
+        if _hf_model_is_cached(hf_model):
+            # Already downloaded: don't let the hub client contact the network
+            # first (measured ~10 s on the first call after process start).
+            # Not cached yet → normal load, so `rag.ingest` can still download it.
+            model_kwargs["local_files_only"] = True
         return HuggingFaceEmbeddings(
             model_name=hf_model,
-            model_kwargs={"device": "cpu"},
+            model_kwargs=model_kwargs,
             encode_kwargs={"normalize_embeddings": True},
         )
+
+
+def _hf_model_is_cached(model_name: str) -> bool:
+    """True when the model is in the local Hugging Face cache (no network)."""
+    if os.path.isdir(model_name):
+        return True
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:  # pragma: no cover - ships with sentence-transformers
+        return False
+    return isinstance(try_to_load_from_cache(model_name, "config.json"), str)

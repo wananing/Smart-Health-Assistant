@@ -1,24 +1,40 @@
 import type { FC } from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import { Activity, CheckCircle2, Droplets, Footprints } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { HabitGoal } from '../../types';
+import { useTextScale } from '../../design/textScale';
 
-interface HabitRowProps {
-    task: HabitGoal | any;
-}
+const TONES: Record<HabitGoal['tone'], { bar: string; icon: string; Icon: LucideIcon }> = {
+    info: { bar: 'bg-info-500', icon: 'bg-info-50 text-info-600', Icon: Droplets },
+    brand: { bar: 'bg-brand-500', icon: 'bg-brand-50 text-brand-700', Icon: Footprints },
+    danger: { bar: 'bg-danger-400', icon: 'bg-danger-50 text-danger-500', Icon: Activity },
+};
 
-const HabitRow: FC<HabitRowProps> = ({ task }) => {
+const HabitRow: FC<{ habit: HabitGoal }> = ({ habit }) => {
+    const t = useTextScale();
+    const tone = TONES[habit.tone];
+    const complete = habit.progress >= 100;
+    const Icon = complete ? CheckCircle2 : tone.Icon;
+
     return (
-        <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 cursor-pointer hover:border-teal-200 transition-colors">
-            <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center border border-slate-100 shrink-0">
-                <CheckCircle2 size={24} className={task.progress > 0 ? "text-teal-500" : "text-slate-300"} />
-            </div>
-            <div className="flex-1">
-                <div className="flex justify-between mb-2">
-                    <span className="font-bold text-slate-800">{task.title}</span>
-                    <span className="text-xs text-slate-500 font-medium bg-slate-50 px-2 py-1 rounded-md">{task.current}</span>
+        <div className="rounded-card bg-white p-4 shadow-raised flex items-center gap-3.5">
+            <span className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${complete ? 'bg-success-50 text-success-600' : tone.icon}`}>
+                <Icon size={20} />
+            </span>
+            <div className="flex-1 min-w-0">
+                <div className="mb-2 flex items-baseline justify-between gap-2">
+                    <span className={`font-semibold text-ink-900 truncate ${t.body}`}>{habit.title}</span>
+                    <span className={`shrink-0 tabular-nums ${habit.progress > 0 ? 'text-ink-700' : 'text-ink-500'} ${t.caption}`}>{habit.current}</span>
                 </div>
-                <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                    <div className={`h-full ${task.color} rounded-full transition-all duration-1000`} style={{ width: `${task.progress}%` }}></div>
+                <div
+                    className="h-2 w-full rounded-full bg-ink-100 overflow-hidden"
+                    role="progressbar"
+                    aria-valuenow={habit.progress}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`${habit.title} 完成度`}
+                >
+                    <div className={`h-full rounded-full transition-[width] duration-slow ${tone.bar}`} style={{ width: `${habit.progress}%` }} />
                 </div>
             </div>
         </div>

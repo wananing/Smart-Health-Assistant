@@ -177,7 +177,7 @@ wheels = [
 
 [[package]]
 name = "backend"
-version = "0.4.0"
+version = "0.5.0"
 source = { virtual = "." }
 dependencies = [
     { name = "chromadb" },
@@ -204,6 +204,7 @@ dependencies = [
     { name = "rank-bm25" },
     { name = "sentence-transformers" },
     { name = "uvicorn" },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -238,6 +239,7 @@ requires-dist = [
     { name = "rank-bm25", specifier = ">=0.2.2" },
     { name = "sentence-transformers", specifier = ">=5.3.0" },
     { name = "uvicorn", specifier = ">=0.41.0" },
+    { name = "websockets", specifier = ">=16.0" },
 ]
 provides-extras = ["eval"]
 

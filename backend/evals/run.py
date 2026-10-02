@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 from openinference.instrumentation import using_attributes
 
 from evals import (
@@ -37,20 +38,35 @@ MODE_TO_AGENT = {
 async def _execute_case(case: EvalCase):
     from agents.graph import master_app
 
+    active_agent = MODE_TO_AGENT.get(case.chat_mode, "advisor_agent")
     initial_state = {
         "messages": [HumanMessage(content=case.input)],
         "user_info": {},
         "next_agent": "",
-        "active_agent": MODE_TO_AGENT.get(case.chat_mode, "advisor_agent"),
+        "active_agent": active_agent,
+        "channel": case.channel,
     }
     # The graph is compiled with a checkpointer; give every case its own thread
     # so no state leaks between cases or between runs.
-    config = {"configurable": {"thread_id": f"eval-{case.id}-{uuid4().hex}"}}
+    config = {"configurable": {"thread_id": f"eval-{case.id}-{uuid4().hex}", "channel": case.channel}}
     with using_attributes(
         session_id=f"eval:{case.id}",
         tags=["evaluation"],
     ):
-        return await master_app.ainvoke(initial_state, config=config)
+        state = await master_app.ainvoke(initial_state, config=config)
+        # Multi-turn cases: answer a pending interrupt the way /api/chat and
+        # /api/voice do (Command(resume=…)), else send a new message.
+        for text in case.followups:
+            if state.get("__interrupt__"):
+                graph_input = Command(resume=text)
+            else:
+                graph_input = {
+                    "messages": [HumanMessage(content=text)],
+                    "active_agent": active_agent,
+                    "channel": case.channel,
+                }
+            state = await master_app.ainvoke(graph_input, config=config)
+        return state
 
 
 async def run_dataset(

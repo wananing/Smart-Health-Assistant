@@ -1,0 +1,75 @@
+{
+  "$comment": "Wire contract of the /api/voice WebSocket JSON frames (audio frames are binary and pinned in backend/voice/protocol.py). One source for three checks: backend tests validate every frame the real gateway sends and parse every uplink example; frontend/mock_voice_server.cjs validates every frame the real browser client sends and every frame it sends back, and test_voice.cjs fails on any violation. Field types: string, integer, number, boolean, object, array, null; 'a|b' means either. 'optional' lists fields that may be absent. 'enum' pins the allowed values of a field. Extra fields are a violation: add them here first. Human-readable description: docs/voice-clinic.md (客户端协议).",
+  "uplink": {
+    "hello": {
+      "fields": { "thread_id": "string|null", "user_info": "object", "caps": "object" },
+      "optional": ["thread_id", "user_info", "caps"],
+      "example": { "type": "hello", "thread_id": null, "user_info": { "name": "测试用户", "elder_mode": false }, "caps": { "aec": true, "sample_rate": 16000, "playback_receipts": true } }
+    },
+    "turn.end": {
+      "fields": { "source": "string" },
+      "optional": ["source"],
+      "enum": { "source": ["vad", "button", "text", "ui"] },
+      "example": { "type": "turn.end", "source": "button" }
+    },
+    "input.text": {
+      "fields": { "text": "string" },
+      "example": { "type": "input.text", "text": "我头疼三天了" }
+    },
+    "ui.action": {
+      "fields": { "kind": "string", "field": "string", "value": "string|array" },
+      "optional": ["field", "value"],
+      "enum": { "kind": ["confirm", "edit_fact", "emergency_dismiss"] },
+      "example": { "type": "ui.action", "kind": "edit_fact", "field": "duration", "value": "五天" }
+    },
+    "playback.started": {
+      "fields": { "turn_id": "integer", "sentence_id": "integer", "played_ms": "integer" },
+      "optional": ["played_ms"],
+      "example": { "type": "playback.started", "turn_id": 2, "sentence_id": 3, "played_ms": 0 }
+    },
+    "playback.ended": {
+      "fields": { "turn_id": "integer", "sentence_id": "integer", "played_ms": "integer" },
+      "optional": ["played_ms"],
+      "example": { "type": "playback.ended", "turn_id": 2, "sentence_id": 3, "played_ms": 1820 }
+    },
+    "playback.interrupted": {
+      "fields": { "turn_id": "integer", "sentence_id": "integer", "played_ms": "integer" },
+      "optional": ["played_ms"],
+      "example": { "type": "playback.interrupted", "turn_id": 2, "sentence_id": 3, "played_ms": 640 }
+    },
+    "bye": {
+      "fields": {},
+      "example": { "type": "bye" }
+    }
+  },
+  "downlink": {
+    "session": { "fields": { "thread_id": "string" } },
+    "state": {
+      "fields": { "value": "string" },
+      "enum": { "value": ["listening", "thinking", "speaking", "emergency"] }
+    },
+    "stt.partial": { "fields": { "turn_id": "integer", "text": "string" } },
+    "stt.final": { "fields": { "turn_id": "integer", "text": "string" } },
+    "facts": { "fields": { "collected": "object", "missing": "array", "version": "integer" } },
+    "tts.sentence": {
+      "fields": { "turn_id": "integer", "sentence_id": "integer", "text": "string", "interruptible": "boolean", "sample_rate": "integer", "cue": "boolean" }
+    },
+    "tts.stop": { "fields": { "turn_id": "integer" } },
+    "interrupt": {
+      "fields": { "content": "string", "kind": "string" },
+      "enum": { "kind": ["followup", "confirm"] }
+    },
+    "text": { "fields": { "content": "string" } },
+    "card": { "fields": { "payload": "object" } },
+    "node_start": { "fields": { "node": "string", "content": "string" } },
+    "node_end": { "fields": { "node": "string" } },
+    "tool_start": { "fields": { "tool": "string", "content": "string" } },
+    "tool_end": { "fields": { "tool": "string" } },
+    "error": {
+      "fields": { "class": "string", "content": "string", "action": "string" },
+      "optional": ["action"],
+      "enum": { "class": ["fatal", "transient", "degraded", "benign"], "action": ["push_to_talk"] }
+    },
+    "summary": { "fields": { "payload": "object" } }
+  }
+}

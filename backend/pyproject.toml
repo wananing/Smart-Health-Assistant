@@ -1,6 +1,6 @@
 [project]
 name = "backend"
-version = "0.4.0"
+version = "0.5.0"
 description = "大健康智能助手后端：FastAPI + LangGraph 多智能体编排、RAG 知识库与 SSE 流式接口"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -33,6 +33,7 @@ dependencies = [
     "openinference-instrumentation-langchain>=0.1.70",
     "openinference-instrumentation-openai>=0.1.54",
     "langgraph-checkpoint-sqlite>=3.1.1",
+    "websockets>=16.0",
 ]
 
 [[tool.uv.index]]

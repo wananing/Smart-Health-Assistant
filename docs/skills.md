@@ -92,11 +92,11 @@ Every agent also receives `load_skill` — a runtime dispatcher that lets the LL
 # The LLM invokes it like this during a ReAct step:
 load_skill(
     skill_name="health_calculator",
-    params_json='{"height_cm": 170, "weight_kg": 70, "age": 35, "gender": "male"}'
+    params_json={"height_cm": 170, "weight_kg": 70, "age": 35, "gender": "male"}
 )
 ```
 
-This avoids having to enumerate every skill in every agent's tool list while still keeping them all accessible.
+`params_json` accepts an object or a JSON object string. This avoids having to enumerate every skill in every agent's tool list while still keeping them all accessible.
 
 ---
 
@@ -157,6 +157,7 @@ class MySkill(BaseSkill):
     name = "my_skill"       # must match SKILL.md frontmatter name
     description = "..."
     tags = ["advisor"]      # must match SKILL.md frontmatter tags
+    input_schema = MySkillInput  # becomes the tool's argument schema
 
     def run(self, **kwargs) -> MySkillOutput:
         data = MySkillInput(**kwargs)
@@ -171,6 +172,8 @@ class MySkill(BaseSkill):
 ```
 
 **That's all.** The registry auto-discovers the skill on next startup — no manual registration step needed.
+
+`input_schema` is what the LLM sees: the tool's arguments are the model's fields, passed directly (`symptom_scorer(symptoms_text="头疼三天", duration_days=3)`). Without it the tool falls back to a single `params_json` string, which models tend to fill with an object or the bare fields, fail validation and retry.
 
 ### 4. Verify
 
@@ -303,11 +306,11 @@ backend/skills/
 # LLM 在 ReAct 步骤中这样调用：
 load_skill(
     skill_name="health_calculator",
-    params_json='{"height_cm": 170, "weight_kg": 70, "age": 35, "gender": "male"}'
+    params_json={"height_cm": 170, "weight_kg": 70, "age": 35, "gender": "male"}
 )
 ```
 
-这样无需在每个智能体的工具列表中枚举所有技能，同时保持所有技能均可访问。
+`params_json` 可以是对象，也可以是 JSON 对象字符串。这样无需在每个智能体的工具列表中枚举所有技能，同时保持所有技能均可访问。
 
 ---
 
@@ -368,6 +371,7 @@ class MySkill(BaseSkill):
     name = "my_skill"       # 必须与 SKILL.md 中的 name 一致
     description = "..."
     tags = ["advisor"]      # 必须与 SKILL.md 中的 tags 一致
+    input_schema = MySkillInput  # 即该工具的参数 schema
 
     def run(self, **kwargs) -> MySkillOutput:
         data = MySkillInput(**kwargs)
@@ -382,6 +386,8 @@ class MySkill(BaseSkill):
 ```
 
 **完成。** 注册表将在下次启动时自动发现该技能——无需手动注册。
+
+`input_schema` 就是 LLM 看到的工具参数：直接传字段（`symptom_scorer(symptoms_text="头疼三天", duration_days=3)`）。不声明时退回到单个 `params_json` 字符串参数，模型常把它传成对象或直接传字段，校验失败后重试。
 
 ### 第四步：验证
 

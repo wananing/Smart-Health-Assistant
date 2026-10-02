@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Barcode, FileText, Mic, PackageSearch, Plus, Send, X } from 'lucide-react';
+import { Barcode, FileText, PackageSearch, Phone, Plus, Send, X } from 'lucide-react';
 import { useGlobalStore } from '../../store/GlobalContext';
 import type { VisionScanType } from '../../services/chatService';
 
@@ -52,7 +52,7 @@ const InputBar: React.FC<InputBarProps> = ({
     onVisionUpload,
     isVisionUploading = false,
 }) => {
-    const { isElderMode, chatMode } = useGlobalStore();
+    const { isElderMode, chatMode, openVoiceCall } = useGlobalStore();
     const [isAttachmentOpen, setIsAttachmentOpen] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const selectedScanTypeRef = useRef<VisionScanType>('report');
@@ -71,9 +71,13 @@ const InputBar: React.FC<InputBarProps> = ({
     };
 
     const attachmentOptions = getAttachmentOrder(chatMode).map(scanType => ATTACHMENT_OPTIONS[scanType]);
+    // The voice call is a clinic triage call, so it is only offered where the user
+    // could mean that: the home chat and the clinic. Elsewhere (insurance, pharmacy,
+    // reports) a phone button would start a symptom interview they didn't ask for.
+    const offerVoiceCall = chatMode === 'general' || chatMode === 'clinic';
 
     return (
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
             <input
                 ref={fileInputRef}
                 type="file"
@@ -82,34 +86,15 @@ const InputBar: React.FC<InputBarProps> = ({
                 className="hidden"
                 onChange={handleFileSelected}
             />
-            <button className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 hover:bg-teal-100 hover:text-teal-600 transition-all shadow-inner">
-                <Mic size={20} />
-            </button>
-            <div className="flex-1 relative">
-                <input
-                    type="text"
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && onSend()}
-                    placeholder={isElderMode ? "按住说话或发消息..." : "描述症状、问医保、查报告..."}
-                    className={`w-full bg-slate-100 rounded-full py-3.5 pl-5 pr-12 focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all font-medium placeholder-slate-400 text-slate-800 ${isElderMode ? 'text-xl h-14' : 'text-sm'}`}
-                />
-                <button
-                    onClick={onSend}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 w-9 h-9 bg-teal-500 hover:bg-teal-600 rounded-full flex items-center justify-center text-white shadow-md shadow-teal-200 transition-colors"
-                >
-                    <Send size={16} />
-                </button>
-            </div>
-            <div className="relative">
+            <div className="relative shrink-0">
                 {isAttachmentOpen && (
-                    <div className="absolute right-0 bottom-14 w-56 rounded-2xl border border-slate-100 bg-white shadow-xl shadow-slate-200/70 p-2 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="absolute left-0 bottom-full mb-2 w-60 rounded-card bg-white p-2 shadow-floating animate-rise motion-reduce:animate-none">
                         <div className="flex items-center justify-between px-2 py-1.5">
-                            <span className="text-xs font-black text-slate-500">图片上传</span>
+                            <span className={`text-ink-600 ${isElderMode ? 'text-body' : 'text-caption'}`}>图片上传</span>
                             <button
                                 type="button"
                                 onClick={() => setIsAttachmentOpen(false)}
-                                className="w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-ink-500 hover:bg-ink-100 hover:text-ink-800 transition-colors duration-base"
                                 aria-label="关闭附件菜单"
                             >
                                 <X size={14} />
@@ -124,14 +109,14 @@ const InputBar: React.FC<InputBarProps> = ({
                                         type="button"
                                         onClick={() => handlePickImage(option.scanType)}
                                         disabled={isVisionUploading}
-                                        className="w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-teal-50 disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
+                                        className="w-full flex items-center gap-3 rounded-control px-2.5 py-2.5 text-left hover:bg-brand-50 disabled:opacity-50 disabled:hover:bg-transparent transition-colors duration-base"
                                     >
-                                        <span className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+                                        <span className="w-10 h-10 rounded-control bg-brand-50 text-brand-700 flex items-center justify-center shrink-0">
                                             <Icon size={18} />
                                         </span>
                                         <span className="min-w-0">
-                                            <span className="block text-sm font-black text-slate-800">{option.label}</span>
-                                            <span className="block text-xs text-slate-400">{option.description}</span>
+                                            <span className={`block font-semibold text-ink-900 ${isElderMode ? 'text-callout' : 'text-body'}`}>{option.label}</span>
+                                            <span className={`block text-ink-600 ${isElderMode ? 'text-body' : 'text-caption'}`}>{option.description}</span>
                                         </span>
                                     </button>
                                 );
@@ -143,12 +128,41 @@ const InputBar: React.FC<InputBarProps> = ({
                     type="button"
                     onClick={() => setIsAttachmentOpen(v => !v)}
                     disabled={isVisionUploading}
-                    className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 hover:bg-slate-200 transition-colors disabled:opacity-60"
+                    className={`${isElderMode ? 'w-14 h-14' : 'w-12 h-12'} shrink-0 rounded-full bg-white text-ink-600 ring-1 ring-inset ring-ink-200 flex items-center justify-center hover:text-brand-700 hover:ring-brand-200 active:scale-[0.96] transition duration-fast disabled:opacity-60`}
                     aria-label="打开图片上传菜单"
                 >
-                    <Plus size={24} className={isAttachmentOpen ? 'rotate-45 transition-transform' : 'transition-transform'} />
+                    <Plus size={22} className={`transition-transform duration-base ${isAttachmentOpen ? 'rotate-45' : ''}`} />
                 </button>
             </div>
+            <div className="flex-1 relative">
+                <input
+                    type="text"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && onSend()}
+                    placeholder={isElderMode ? "打字提问" : "描述症状、问医保、查报告…"}
+                    className={`w-full rounded-full bg-ink-50 pl-5 pr-14 text-ink-900 placeholder:text-ink-400 ring-1 ring-inset ring-ink-200 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500 transition duration-base ${isElderMode ? 'h-14 text-title' : 'h-12 text-callout'}`}
+                />
+                <button
+                    onClick={onSend}
+                    disabled={!inputValue.trim()}
+                    aria-label="发送"
+                    className={`absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full flex items-center justify-center transition duration-base enabled:active:scale-[0.94] ${isElderMode ? 'w-11 h-11' : 'w-9 h-9'} ${inputValue.trim() ? 'bg-brand-700 text-white shadow-raised hover:bg-brand-800' : 'bg-ink-100 text-ink-400'}`}
+                >
+                    <Send size={16} />
+                </button>
+            </div>
+            {offerVoiceCall && (
+                <button
+                    type="button"
+                    onClick={openVoiceCall}
+                    aria-label="语音问诊通话"
+                    title="打电话问诊"
+                    className={`${isElderMode ? 'w-14 h-14' : 'w-12 h-12'} shrink-0 rounded-full bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-raised flex items-center justify-center hover:to-brand-800 active:scale-[0.94] transition duration-fast`}
+                >
+                    <Phone size={isElderMode ? 24 : 20} fill="currentColor" strokeWidth={0} />
+                </button>
+            )}
         </div>
     );
 };

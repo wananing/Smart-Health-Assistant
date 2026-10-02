@@ -1,40 +1,42 @@
-import type { FC, ReactNode } from 'react';
+import type { FC } from 'react';
+import { Check } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { useTextScale } from '../../design/textScale';
 
-type Theme = 'rose' | 'indigo';
+type Tone = 'danger' | 'info';
 
 interface VitalCardProps {
     title: string;
-    theme: Theme;
-    icon: ReactNode;
-    valueNode: ReactNode;
-    statusText: string;
+    tone: Tone;
+    icon: LucideIcon;
+    value: string;
+    unit: string;
+    status: string;
 }
 
-const THEMES = {
-    rose: {
-        container: 'bg-rose-50 border-rose-100',
-        title: 'text-rose-600',
-        status: 'text-rose-500 border-rose-100',
-    },
-    indigo: {
-        container: 'bg-indigo-50 border-indigo-100',
-        title: 'text-indigo-600',
-        status: 'text-indigo-500 border-indigo-100',
-    },
+// Tone only colours the icon; the card itself stays white like every other card.
+const ICON_TONES: Record<Tone, string> = {
+    danger: 'bg-danger-50 text-danger-500',
+    info: 'bg-info-50 text-info-600',
 };
 
-const VitalCard: FC<VitalCardProps> = ({ title, theme, icon, valueNode, statusText }) => {
-    const styles = THEMES[theme];
+const VitalCard: FC<VitalCardProps> = ({ title, tone, icon: Icon, value, unit, status }) => {
+    const t = useTextScale();
 
     return (
-        <div className={`p-4 rounded-2xl border ${styles.container}`}>
-            <div className="flex justify-between items-start mb-2">
-                <div className={`text-xs font-bold ${styles.title}`}>{title}</div>
-                {icon}
+        <div className="rounded-card bg-white p-4 shadow-raised">
+            <div className="flex items-center justify-between">
+                <span className={`text-ink-600 ${t.body}`}>{title}</span>
+                <span className={`w-8 h-8 rounded-full flex items-center justify-center ${ICON_TONES[tone]}`}>
+                    <Icon size={16} />
+                </span>
             </div>
-            <div className="text-3xl font-black text-slate-800 tabular-nums">{valueNode}</div>
-            <div className={`text-[10px] mt-2 bg-white inline-block px-2 py-0.5 rounded-sm border ${styles.status}`}>
-                {statusText}
+            <div className="mt-1 flex items-baseline gap-1">
+                <span className={`font-semibold text-ink-900 tabular-nums ${t.headline}`}>{value}</span>
+                <span className={`text-ink-600 ${t.caption}`}>{unit}</span>
+            </div>
+            <div className={`mt-2 inline-flex items-center gap-1 rounded-full bg-ink-50 px-2.5 py-0.5 text-ink-700 ring-1 ring-inset ring-ink-200 ${t.caption}`}>
+                <Check size={12} strokeWidth={3} className="text-success-600" />{status}
             </div>
         </div>
     );
