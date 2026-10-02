@@ -1,7 +1,18 @@
 // @refresh reset
 import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from 'react';
-import type { ChatMode, ChatMessage, ChatCardPayload, ScanType, ThreadId } from '../types';
+import type { ChatMode, ChatMessage, ChatCardPayload, ThreadId } from '../types';
 import { USER_NAME } from '../data/mockData';
+import { hasVoiceConsent, primeVoiceCall, releaseVoiceCall } from '../services/voiceService';
+
+/** What a finished voice call hands back to the text chat */
+export interface VoiceCallRecord {
+    /** Final captions and cards from the call, plus the summary card */
+    messages: ChatMessage[];
+    /** The call's server-side thread, kept so the user can continue in text */
+    threadId: ThreadId | null;
+    /** Mode to continue in (clinic, or the specialist a handoff went to) */
+    mode: ChatMode;
+}
 
 // Per-mode config used to auto-generate Welcome and Exit cards
 const MODE_CARD_CONFIG: Record<string, { title: string; description: string; exitTitle: string }> = {
@@ -51,10 +62,15 @@ interface GlobalState {
     /** Drop the server-side conversation and start a brand new thread. */
     resetThread: () => void;
 
-    isScanning: boolean;
-    setIsScanning: (val: boolean) => void;
-    scanType: ScanType;
-    setScanType: (type: ScanType) => void;
+    isVoiceCallOpen: boolean;
+    /**
+     * Open the voice clinic call. Call it synchronously from a click handler:
+     * once the user has consented it unlocks audio and requests the mic in the
+     * same gesture, which mobile browsers require.
+     */
+    openVoiceCall: () => void;
+    /** Close the call screen; with a record, merge the call into the chat. */
+    closeVoiceCall: (record?: VoiceCallRecord) => void;
 }
 
 const GlobalContext = createContext<GlobalState | undefined>(undefined);
@@ -64,7 +80,7 @@ export const GlobalProvider = ({ children }: { children: ReactNode }) => {
     const [chatMode, setChatMode] = useState<ChatMode>('general');
     const chatModeRef = useRef<ChatMode>('general');
 
-    const [messages, setMessages] = useState<ChatMessage[]>([
+    const [messages, setMessages] = useState<ChatMessage[]>(() => [
         {
             id: 'msg-1',
             role: 'assistant',
@@ -73,11 +89,31 @@ export const GlobalProvider = ({ children }: { children: ReactNode }) => {
         }
     ]);
 
-    const [isScanning, setIsScanning] = useState(false);
-    const [scanType, setScanType] = useState<ScanType>('药盒');
     const [threadId, setThreadId] = useState<ThreadId | null>(null);
 
+    const [isVoiceCallOpen, setIsVoiceCallOpen] = useState(false);
+
     const resetThread = useCallback(() => setThreadId(null), []);
+
+    const openVoiceCall = useCallback(() => {
+        // Without consent the call screen shows the notice first, and its
+        // "agree" tap is the gesture that primes audio instead.
+        if (hasVoiceConsent()) primeVoiceCall();
+        setIsVoiceCallOpen(true);
+    }, []);
+
+    const closeVoiceCall = useCallback((record?: VoiceCallRecord) => {
+        releaseVoiceCall();
+        setIsVoiceCallOpen(false);
+        if (!record) return;
+        if (record.messages.length > 0) {
+            setMessages(prev => [...prev, ...record.messages]);
+        }
+        if (record.threadId) setThreadId(record.threadId);
+        // Continue in the call's mode without a welcome card: the call transcript is the context.
+        chatModeRef.current = record.mode;
+        setChatMode(record.mode);
+    }, []);
 
     const enterChatMode = useCallback((mode: ChatMode) => {
         if (mode === 'general' || mode === 'dashboard') {
@@ -189,14 +225,15 @@ export const GlobalProvider = ({ children }: { children: ReactNode }) => {
             chatMode, setChatMode, enterChatMode, exitChatMode,
             messages, setMessages,
             threadId, setThreadId, resetThread,
-            isScanning, setIsScanning,
-            scanType, setScanType
+            isVoiceCallOpen, openVoiceCall, closeVoiceCall
         }}>
             {children}
         </GlobalContext.Provider>
     );
 };
 
+// The hook lives beside its provider on purpose; every consumer imports both from here.
+// eslint-disable-next-line react-refresh/only-export-components
 export const useGlobalStore = () => {
     const context = useContext(GlobalContext);
     if (context === undefined) {

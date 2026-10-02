@@ -1,75 +1,53 @@
 import type { FC } from 'react';
-import { Stethoscope, ShieldCheck, Pill, FileText, Activity, X } from 'lucide-react';
+import { Stethoscope, ShieldCheck, Pill, FileText, Activity, Phone, X } from 'lucide-react';
 import { useGlobalStore } from '../../store/GlobalContext';
 import type { ChatMode } from '../../types';
 
+// Modes are told apart by icon and name; colour stays on the brand so the app reads as one product.
 const MODE_CONFIG: Record<Exclude<ChatMode, 'general'>, {
     icon: FC<{ size?: number; className?: string }>;
     label: string;
-    sublabel: string;
-    color: string;
-    border: string;
 }> = {
-    clinic: {
-        icon: Stethoscope,
-        label: 'AI 辅助诊室',
-        sublabel: '正在收集您的症状以生成专业就医指引',
-        color: 'text-teal-700',
-        border: 'border-teal-200 bg-teal-50',
-    },
-    insurance: {
-        icon: ShieldCheck,
-        label: '医保专区',
-        sublabel: '可查询余额、报销政策及办理指引',
-        color: 'text-blue-700',
-        border: 'border-blue-200 bg-blue-50',
-    },
-    pharmacy: {
-        icon: Pill,
-        label: '药品服务',
-        sublabel: '药品查询、用药提醒及真伪鉴别',
-        color: 'text-violet-700',
-        border: 'border-violet-200 bg-violet-50',
-    },
-    report: {
-        icon: FileText,
-        label: '报告解读',
-        sublabel: 'AI 正在分析您的检查报告',
-        color: 'text-rose-700',
-        border: 'border-rose-200 bg-rose-50',
-    },
-    dashboard: {
-        icon: Activity,
-        label: '健康数据',
-        sublabel: '查看您的健康指标与目标进度',
-        color: 'text-orange-700',
-        border: 'border-orange-200 bg-orange-50',
-    },
+    clinic: { icon: Stethoscope, label: 'AI 诊室' },
+    insurance: { icon: ShieldCheck, label: '医保专区' },
+    pharmacy: { icon: Pill, label: '药管家' },
+    report: { icon: FileText, label: '报告解读' },
+    dashboard: { icon: Activity, label: '健康数据' },
 };
 
 const ChatModeHeader: FC = () => {
-    const { chatMode, exitChatMode } = useGlobalStore();
+    const { chatMode, exitChatMode, openVoiceCall, isElderMode } = useGlobalStore();
 
     if (chatMode === 'general') return null;
 
     const config = MODE_CONFIG[chatMode];
+    if (!config) return null;
     const Icon = config.icon;
 
     return (
-        <div className={`mx-4 mt-3 mb-1 flex items-center gap-3 px-4 py-3 rounded-2xl border ${config.border} animate-in slide-in-from-top-2 duration-300`}>
-            <div className={`p-2 rounded-xl bg-white/70 shadow-sm ${config.color}`}>
+        <div className="shrink-0 mx-4 mb-1 flex items-center gap-3 rounded-full bg-white/90 pl-1.5 pr-1.5 py-1.5 shadow-raised animate-rise motion-reduce:animate-none">
+            <span className="w-9 h-9 rounded-full bg-brand-50 text-brand-700 flex items-center justify-center shrink-0">
                 <Icon size={18} />
-            </div>
-            <div className="flex-1 min-w-0">
-                <p className={`font-bold text-sm ${config.color}`}>{config.label}</p>
-                <p className="text-xs text-slate-500 truncate">{config.sublabel}</p>
-            </div>
+            </span>
+            <span className={`flex-1 min-w-0 truncate font-semibold text-ink-900 ${isElderMode ? 'text-title' : 'text-callout'}`}>
+                {config.label}
+            </span>
+            {chatMode === 'clinic' && (
+                <button
+                    onClick={openVoiceCall}
+                    title="语音问诊"
+                    className={`flex items-center gap-1.5 rounded-full bg-brand-700 px-3.5 font-semibold text-white shadow-raised hover:bg-brand-800 active:scale-[0.98] transition duration-fast shrink-0 ${isElderMode ? 'h-11 text-callout' : 'h-9 text-body'}`}
+                >
+                    <Phone size={15} fill="currentColor" strokeWidth={0} /> 语音问诊
+                </button>
+            )}
             <button
                 onClick={exitChatMode}
-                className="p-1.5 rounded-full hover:bg-white/80 text-slate-400 hover:text-slate-600 transition-colors flex-shrink-0"
+                aria-label="退出当前模式"
                 title="退出当前模式"
+                className="w-9 h-9 rounded-full flex items-center justify-center text-ink-500 hover:bg-ink-100 hover:text-ink-800 transition-colors duration-base shrink-0"
             >
-                <X size={16} />
+                <X size={18} />
             </button>
         </div>
     );

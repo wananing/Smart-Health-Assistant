@@ -3,7 +3,6 @@ import { useGlobalStore } from '../../store/GlobalContext';
 import { MODULES } from '../../data/mockData';
 import type { ChatMessage, ChatMode } from '../../types';
 import type { VisionScanType } from '../../services/chatService';
-import SuggestionScroller from '../chat/SuggestionScroller';
 import InputBar from '../chat/InputBar';
 
 const getVisionUserText = (scanType: VisionScanType) => {
@@ -208,30 +207,34 @@ const BottomNav = () => {
     };
 
     return (
-        <footer className="absolute bottom-0 left-0 w-full p-4 bg-white/95 backdrop-blur-md border-t border-slate-100 z-40 rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.03)] pb-6">
-            <SuggestionScroller onSend={handleSend} />
-            <InputBar
-                inputValue={inputValue}
-                setInputValue={setInputValue}
-                onSend={() => handleSend()}
-                onVisionUpload={handleVisionUpload}
-                isVisionUploading={isVisionUploading}
-            />
-
-            {/* Nav icons — switch chatMode context instead of navigating to pages */}
-            <div className="flex justify-between mt-5 px-3">
-                {MODULES.map((mod) => (
-                    <button
-                        key={mod.id}
-                        onClick={() => enterChatMode(mod.id as ChatMode)}
-                        className="flex flex-col items-center gap-1.5 group"
-                    >
-                        <div className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all duration-300 ${chatMode === mod.id ? 'bg-teal-500 text-white shadow-md shadow-teal-200' : 'bg-slate-50 text-slate-400 group-hover:bg-teal-50 group-hover:text-teal-600'}`}>
-                            <mod.icon size={20} />
-                        </div>
-                        <span className={`font-bold transition-colors ${chatMode === mod.id ? 'text-teal-600' : 'text-slate-400'} ${isElderMode ? 'text-sm' : 'text-[10px]'}`}>{mod.name}</span>
-                    </button>
-                ))}
+        <footer className="absolute bottom-0 left-0 w-full z-40 font-cn rounded-t-card bg-white/95 backdrop-blur-md shadow-docked pt-3 pb-[max(env(safe-area-inset-bottom),0.75rem)]">
+            {/* Module shortcuts — switch chatMode context instead of navigating to pages */}
+            <nav className="flex gap-2 overflow-x-auto scrollbar-hide px-4 pb-3" aria-label="功能入口">
+                {MODULES.map((mod) => {
+                    const active = chatMode === mod.id;
+                    return (
+                        <button
+                            key={mod.id}
+                            onClick={() => enterChatMode(mod.id)}
+                            aria-current={active ? 'page' : undefined}
+                            className={`shrink-0 flex items-center gap-1.5 rounded-full pl-2.5 pr-3.5 whitespace-nowrap active:scale-[0.97] transition duration-fast ${isElderMode ? 'h-11 text-callout' : 'h-9 text-body'} ${active
+                                ? 'bg-brand-700 text-white font-semibold shadow-raised'
+                                : 'bg-white text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-brand-50 hover:ring-brand-200'}`}
+                        >
+                            <mod.icon size={isElderMode ? 20 : 16} className={active ? 'text-white' : 'text-brand-700'} />
+                            {mod.name}
+                        </button>
+                    );
+                })}
+            </nav>
+            <div className="px-4">
+                <InputBar
+                    inputValue={inputValue}
+                    setInputValue={setInputValue}
+                    onSend={() => handleSend()}
+                    onVisionUpload={handleVisionUpload}
+                    isVisionUploading={isVisionUploading}
+                />
             </div>
         </footer>
     );
