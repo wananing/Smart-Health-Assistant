@@ -78,7 +78,7 @@ async def lifespan(_app: FastAPI):
     _observability_runtime.shutdown()
 
 
-app = FastAPI(title="大健康 AI 后端", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="大健康 AI 后端", version="0.5.0", lifespan=lifespan)
 
 # Vite dev servers. Shared by CORS and the /api/voice WebSocket Origin check
 # (CORS does not apply to WebSocket handshakes).
@@ -434,7 +434,7 @@ async def _stream_agent_events(graph_input: Any, config: dict | None = None):
 
 @app.get("/")
 async def root():
-    return {"message": "大健康 AI 后端 v0.4 (LangGraph)"}
+    return {"message": "大健康 AI 后端 v0.5 (LangGraph)"}
 
 
 @app.get("/health")
