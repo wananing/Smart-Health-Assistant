@@ -340,6 +340,9 @@ const pushToTalkCall = async (browser) => {
     } finally {
         await browser.close();
     }
+    // Every frame of every scenario, both directions, against contracts/voice-frames.json.
+    const { contractViolations = ['mock did not report contract checks'] } = await mockStats().catch(() => ({}));
+    check('all frames follow the shared wire contract', contractViolations.length === 0, [...new Set(contractViolations)].slice(0, 5).join('; '));
     const failed = results.filter(r => !r.ok).length;
     console.log(`\n${results.length - failed}/${results.length} checks passed`);
     process.exit(failed ? 1 : 0);

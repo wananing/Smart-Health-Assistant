@@ -18,12 +18,51 @@
  *
  * Like the real gateway, every committed non-speech input (typed text, the
  * confirm tap, a fact edit) is echoed back as stt.final.
- * GET /stats returns uplink/receipt statistics for the latest call.
+ * GET /stats returns uplink/receipt statistics for the latest call, plus every
+ * contract violation seen since the server started (see contracts/voice-frames.json:
+ * the browser client's frames and this mock's own frames are both checked).
  *
  * No dependencies: the WebSocket framing below is a minimal RFC 6455 server.
  */
 const http = require('http');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
+// ── shared wire contract (same rules as backend/voice/contract.py) ──
+const CONTRACT = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'contracts', 'voice-frames.json'), 'utf8'));
+const TYPE_CHECKS = {
+    string: v => typeof v === 'string',
+    integer: v => Number.isInteger(v),
+    number: v => typeof v === 'number',
+    boolean: v => typeof v === 'boolean',
+    object: v => v !== null && typeof v === 'object' && !Array.isArray(v),
+    array: v => Array.isArray(v),
+    null: v => v === null,
+};
+const contractViolations = [];
+const checkContract = (frame, direction) => {
+    const spec = CONTRACT[direction][frame && frame.type];
+    if (!spec) {
+        contractViolations.push(`${direction} frame type ${JSON.stringify(frame && frame.type)} is not in the contract`);
+        return;
+    }
+    const fields = spec.fields || {};
+    const optional = new Set(spec.optional || []);
+    const enums = spec.enum || {};
+    for (const [name, value] of Object.entries(frame)) {
+        if (name === 'type') continue;
+        if (!(name in fields)) { contractViolations.push(`${direction} ${frame.type}: unexpected field ${name}`); continue; }
+        if (!fields[name].split('|').some(t => TYPE_CHECKS[t](value))) {
+            contractViolations.push(`${direction} ${frame.type}.${name}: expected ${fields[name]}`);
+        } else if (enums[name] && !enums[name].includes(value)) {
+            contractViolations.push(`${direction} ${frame.type}.${name}: ${JSON.stringify(value)} not allowed`);
+        }
+    }
+    for (const name of Object.keys(fields)) {
+        if (!optional.has(name) && !(name in frame)) contractViolations.push(`${direction} ${frame.type}: missing field ${name}`);
+    }
+};
 
 const PORT = Number(process.env.MOCK_VOICE_PORT || 8765);
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -138,6 +177,7 @@ class WsConnection {
     }
 
     sendJson(obj) {
+        checkContract(obj, 'downlink');
         this.sendFrame(0x1, Buffer.from(JSON.stringify(obj), 'utf8'));
     }
 
@@ -232,8 +272,10 @@ class MockCall {
         try {
             msg = JSON.parse(raw);
         } catch {
+            contractViolations.push('uplink frame is not JSON');
             return;
         }
+        checkContract(msg, 'uplink');
         if (msg.type.startsWith('playback.')) {
             this.stats.receipts.push({ type: msg.type, turn_id: msg.turn_id, sentence_id: msg.sentence_id, played_ms: msg.played_ms });
         } else if (msg.type === 'hello') {
@@ -638,7 +680,7 @@ const server = http.createServer((req, res) => {
     }
     if (req.url === '/stats') {
         res.writeHead(200, headers);
-        res.end(JSON.stringify(lastStats));
+        res.end(JSON.stringify({ ...lastStats, contractViolations }));
         return;
     }
     res.writeHead(404, headers);

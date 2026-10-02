@@ -20,6 +20,7 @@ from voice.gateway import GraphBridge, VoiceCall
 from voice.protocol import DOWNLINK_HEADER, unpack_downlink_audio
 from voice.providers.fake import FakeAsrProvider, FakeTtsProvider
 from voice.turns import VoiceTimings
+from voice.contract import contract_violations
 
 # Fast, deterministic timings: watchdogs that a test does not exercise are
 # pushed far away; barge-in has no minimum speech or protection window.
@@ -48,13 +49,18 @@ class FakeTransport:
         self.frames: list[Any] = []
         self.closed = False
         self.close_code: int | None = None
+        # Every JSON frame the gateway sends is checked against the shared wire
+        # contract (contracts/voice-frames.json); CallHarness.stop() fails on any.
+        self.contract_violations: list[str] = []
 
     # --- Transport -------------------------------------------------------
     async def receive(self):
         return await self.incoming.get()
 
     async def send_text(self, text: str) -> None:
-        self.frames.append(json.loads(text))
+        frame = json.loads(text)
+        self.contract_violations.extend(contract_violations(frame, "downlink"))
+        self.frames.append(frame)
 
     async def send_bytes(self, data: bytes) -> None:
         self.frames.append(bytes(data))
@@ -300,3 +306,8 @@ class CallHarness:
             except asyncio.TimeoutError:
                 self.task.cancel()
         self.task = None
+        if self.transport.contract_violations:
+            raise AssertionError(
+                "gateway frames broke contracts/voice-frames.json: "
+                + "; ".join(sorted(set(self.transport.contract_violations)))
+            )
