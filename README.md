@@ -179,6 +179,8 @@ flowchart LR
 
 ## 🏗️ 系统架构
 
+<p align="center"><img src="docs/images/architecture.zh.svg" alt="系统架构：文字与语音两个通道进入同一张 LangGraph，安全闸门位于模型之前和出声之前" width="900"></p>
+
 项目的核心在于 **“状态路由 + Agent 转接 + 工具卡片双向绑定 + 语音即一层 I/O”**：
 
 1. **Agent State**: `messages`、`active_agent`、`user_info`、`handoff_count`；主图编译时携带 checkpointer，会话状态按 `thread_id` 持久化在服务端，前端后续只需发送最新一条消息。

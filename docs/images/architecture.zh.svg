@@ -1,0 +1,242 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1250" width="960" height="1250" role="img" aria-labelledby="ttl">
+<title id="ttl">大健康智能助手 · 系统架构</title>
+<defs>
+<filter id="sh" x="-10%" y="-10%" width="120%" height="140%"><feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#0f172a" flood-opacity="0.07"/></filter>
+<marker id="m-req" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" fill="#0d9488"/></marker>
+<marker id="m-text" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" fill="#0f766e"/></marker>
+<marker id="m-audio" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" fill="#0284c7"/></marker>
+<marker id="m-hand" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" fill="#64748b"/></marker>
+<marker id="m-thin" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 1 L10 5 L0 9 z" fill="#94a3b8"/></marker>
+</defs>
+<style>text{font-family:"PingFang SC","Noto Sans SC","Noto Sans CJK SC","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;fill:#475569;font-size:13px}.T{font-size:22px;font-weight:700;fill:#0f172a}.I{font-size:14px;fill:#115e59;font-weight:600}.h{font-size:15px;font-weight:700;fill:#0f172a}.p{font-size:13px;fill:#64748b}.t{font-size:14px;font-weight:700}.b{fill:#475569}.m{fill:#64748b}.l{fill:#475569}.lb{fill:#0f766e;font-weight:600}.ls{fill:#0369a1;font-weight:600}.chip{fill:#0f766e;font-weight:700}.req{fill:none;stroke:#0d9488;stroke-width:1.6}.text{fill:none;stroke:#0f766e;stroke-width:3.2}.audio{fill:none;stroke:#0284c7;stroke-width:1.8}.hand{fill:none;stroke:#64748b;stroke-width:1.4;stroke-dasharray:4 3}.thin{fill:none;stroke:#94a3b8;stroke-width:1.4}</style>
+<rect width="960" height="1250" fill="#f8fafc"/>
+<text x="16" y="36" class="T">大健康智能助手 · 系统架构</text>
+<text x="16" y="60" class="I">① 文字与语音是同一张 LangGraph 的两个 I/O 通道</text>
+<text x="16" y="80" class="I">② 安全闸门在模型之前（急症规则）和出声之前（出声前检查）</text>
+<rect x="16" y="96" width="928" height="132" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+<text x="32" y="120" class="h">客户端 · React 19 + Vite · 移动端</text>
+<text x="928" y="120" class="p" text-anchor="end">frontend/src</text>
+<rect x="32" y="132" width="360" height="86" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="46" y="154.5" class="t" fill="#0f172a">文字对话 · chatService.ts</text>
+<text x="46" y="172.5" class="b">POST 请求，读取 SSE 事件流</text>
+<text x="46" y="189.5" class="b">node_start 切换专科模式（模式锁定）</text>
+<text x="46" y="206.5" class="b">ChatCardRenderer 把 card 事件渲染成结果卡片</text>
+<rect x="432" y="132" width="496" height="86" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="446" y="154.5" class="t" fill="#0f172a">语音通话 · VoiceCallScreen + voiceService.ts</text>
+<text x="446" y="172.5" class="b">AudioWorklet 采集 PCM16 16 kHz（AEC · 降噪）</text>
+<text x="446" y="189.5" class="b">浅缓冲播放 + 播放回执</text>
+<text x="446" y="206.5" class="b">字幕 · 症状要点面板 · 分诊卡片</text>
+<path d="M84 218 L84 284" class="req" marker-end="url(#m-req)"/>
+<text x="90" y="243" class="lb">POST</text>
+<path d="M146 284 L146 218" class="req" marker-end="url(#m-req)"/>
+<text x="152" y="243" class="lb">SSE</text>
+<path d="M286 218 L286 284" class="req" marker-end="url(#m-req)"/>
+<text x="292" y="243" class="lb">拍照图片</text>
+<path d="M468 218 L468 284" class="audio" marker-end="url(#m-audio)"/>
+<text x="474" y="243" class="ls">PCM 上行</text>
+<path d="M590 284 L590 218" class="audio" marker-end="url(#m-audio)"/>
+<text x="596" y="243" class="ls">分句音频</text>
+<path d="M700 218 L700 284" class="req" marker-end="url(#m-req)" marker-start="url(#m-req)"/>
+<text x="706" y="243" class="lb">JSON 帧：字幕 · 要点 · 回执</text>
+<rect x="16" y="250" width="928" height="110" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+<text x="32" y="274" class="h">API 层 · FastAPI</text>
+<text x="928" y="274" class="p" text-anchor="end">backend/main.py</text>
+<rect x="32" y="284" width="148" height="64" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="46" y="304" class="t" fill="#0f172a">POST /api/chat</text>
+<text x="46" y="322" class="b">SSE 事件流</text>
+<text x="46" y="339" class="b">按 thread_id 续接</text>
+<rect x="192" y="284" width="200" height="64" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="206" y="304" class="t" fill="#0f172a">POST /api/vision-chat</text>
+<text x="206" y="322" class="b">视觉模型 → 脱敏</text>
+<text x="206" y="339" class="b">→ 作为用户消息进图</text>
+<rect x="420" y="284" width="508" height="64" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="434" y="312.5" class="t" fill="#0f172a">WS /api/voice</text>
+<text x="434" y="330.5" class="b">Origin 校验 · 二进制 PCM + JSON 帧（contracts/voice-frames.json）</text>
+<rect x="132" y="372" width="92" height="24" rx="12" fill="#ccfbf1"/>
+<text x="178" y="389" class="chip" text-anchor="middle">文字通道</text>
+<rect x="132" y="404" width="236" height="148" rx="12" fill="#ffffff" stroke="#e2e8f0"/>
+<text x="146" y="432" class="t" fill="#334155">SSE 事件</text>
+<text x="146" y="450" class="b">_stream_agent_events</text>
+<text x="146" y="467" class="b">session · text</text>
+<text x="146" y="484" class="b">node_start / node_end</text>
+<text x="146" y="501" class="b">tool_start / tool_end</text>
+<text x="146" y="518" class="b">card · interrupt · finish</text>
+<text x="146" y="535" class="b">custom 流中的 card 原样转发</text>
+<path d="M70 348 L70 612" class="text" marker-end="url(#m-text)"/>
+<path d="M108 612 L108 348" class="req" marker-end="url(#m-req)"/>
+<path d="M380 348 L380 612" class="text" marker-end="url(#m-text)"/>
+<text x="386" y="368" class="l"></text>
+<rect x="420" y="368" width="524" height="216" rx="16" fill="#f0fdfa" stroke="#99f6e4"/>
+<text x="486" y="392" class="h">语音网关 · 语音通道</text>
+<text x="928" y="392" class="p" text-anchor="end">backend/voice/</text>
+<rect x="440" y="404" width="110" height="72" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="495" y="428" class="t" fill="#0f172a" text-anchor="middle">流式 ASR</text>
+<text x="495" y="446" class="m" text-anchor="middle">asr.py</text>
+<text x="495" y="463" class="b" text-anchor="middle">partial · 端点</text>
+<rect x="566" y="404" width="110" height="72" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="621" y="428" class="t" fill="#0f172a" text-anchor="middle">回合状态机</text>
+<text x="621" y="446" class="m" text-anchor="middle">turns.py</text>
+<text x="621" y="463" class="b" text-anchor="middle">判停 · 打断</text>
+<rect x="692" y="404" width="110" height="72" rx="12" fill="#fffbeb" stroke="#fcd34d" filter="url(#sh)"/>
+<text x="747" y="428" class="t" fill="#92400e" text-anchor="middle">进图前规则</text>
+<text x="747" y="446" class="m" text-anchor="middle">shortcuts.py</text>
+<text x="747" y="463" class="b" text-anchor="middle">急症·退出·重说</text>
+<rect x="818" y="404" width="110" height="72" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="873" y="428" class="t" fill="#0f172a" text-anchor="middle">RunManager</text>
+<text x="873" y="446" class="m" text-anchor="middle">runs.py</text>
+<text x="873" y="463" class="b" text-anchor="middle">运行 · 看门狗</text>
+<path d="M550 440 L566 440" class="req" marker-end="url(#m-req)"/>
+<path d="M676 440 L692 440" class="req" marker-end="url(#m-req)"/>
+<path d="M802 440 L818 440" class="req" marker-end="url(#m-req)"/>
+<rect x="440" y="500" width="126" height="72" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="503" y="524" class="t" fill="#0f172a" text-anchor="middle">流式 TTS</text>
+<text x="503" y="542" class="m" text-anchor="middle">tts.py · cues.py</text>
+<text x="503" y="559" class="b" text-anchor="middle">提示语预合成</text>
+<rect x="584" y="500" width="128" height="72" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="648" y="524" class="t" fill="#0f172a" text-anchor="middle">输出仲裁</text>
+<text x="648" y="542" class="m" text-anchor="middle">arbiter.py</text>
+<text x="648" y="559" class="b" text-anchor="middle">代际 · 单一发言者</text>
+<rect x="730" y="500" width="150" height="72" rx="12" fill="#fffbeb" stroke="#fcd34d" filter="url(#sh)"/>
+<text x="805" y="515.5" class="t" fill="#92400e" text-anchor="middle">渲染 + 出声前检查</text>
+<text x="805" y="533.5" class="m" text-anchor="middle">render.py</text>
+<text x="805" y="550.5" class="b" text-anchor="middle">念什么 / 只上屏</text>
+<text x="805" y="567.5" class="b" text-anchor="middle">不通过则只上屏</text>
+<path d="M849 476 L849 500" class="req" marker-end="url(#m-req)"/>
+<path d="M730 536 L712 536" class="req" marker-end="url(#m-req)"/>
+<path d="M584 536 L566 536" class="req" marker-end="url(#m-req)"/>
+<path d="M470 348 L470 404" class="audio" marker-end="url(#m-audio)"/>
+<path d="M440 536 L430 536 L430 348" class="audio" marker-end="url(#m-audio)"/>
+<path d="M904 476 L904 612" class="text" marker-end="url(#m-text)" marker-start="url(#m-text)"/>
+<line x1="16" y1="596" x2="944" y2="596" stroke="#5eead4" stroke-width="1.4" stroke-dasharray="6 5"/>
+<rect x="430.5" y="585" width="439" height="22" rx="11" fill="#ffffff" stroke="#5eead4"/>
+<text x="650" y="600.5" class="lb" text-anchor="middle">只传文本 · HumanMessage / Command(resume) · 同一 thread_id</text>
+<rect x="16" y="612" width="928" height="306" rx="16" fill="#f0fdfa" stroke="#99f6e4"/>
+<text x="32" y="638" class="h">LangGraph 主图 · master_app</text>
+<text x="928" y="638" class="p" text-anchor="end">agents/graph.py</text>
+<rect x="32" y="656" width="164" height="92" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="46" y="681.5" class="t" fill="#0f172a">router</text>
+<text x="46" y="699.5" class="b">退出词 → advisor</text>
+<text x="46" y="716.5" class="b">已锁定专科 → 直通</text>
+<text x="46" y="733.5" class="b" fill="#6d28d9" style="fill:#6d28d9">否则 LLM 分类</text>
+<path d="M32 782 a82.0 10 0 0 0 164 0 v92 a82.0 10 0 0 1 -164 0 z" fill="#ffffff" stroke="#cbd5e1" filter="url(#sh)"/>
+<ellipse cx="114.0" cy="782" rx="82.0" ry="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+<text x="46" y="814" class="t">Checkpointer</text>
+<text x="46" y="833" class="b">thread_id</text>
+<text x="46" y="850" class="b">memory / sqlite</text>
+<text x="46" y="867" class="b">interrupt() 恢复</text>
+<rect x="214" y="656" width="144" height="38" rx="19" fill="#ffffff" stroke="#5eead4" filter="url(#sh)"/>
+<text x="286" y="680" class="t" fill="#115e59" style="fill:#115e59" text-anchor="middle">clinic_node  诊室</text>
+<rect x="214" y="704" width="144" height="38" rx="19" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="286" y="728" class="l" text-anchor="middle">insurance_node  医保</text>
+<rect x="214" y="752" width="144" height="38" rx="19" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="286" y="776" class="l" text-anchor="middle">report_node  报告</text>
+<rect x="214" y="800" width="144" height="38" rx="19" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="286" y="824" class="l" text-anchor="middle">pharmacy_node  药房</text>
+<rect x="214" y="848" width="144" height="38" rx="19" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="286" y="872" class="l" text-anchor="middle">advisor_node  综合</text>
+<path d="M196 702 L204 702" class="req"/>
+<path d="M204 675 V867" class="req"/>
+<path d="M204 675 L214 675" class="req" marker-end="url(#m-req)"/>
+<path d="M204 723 L214 723" class="req" marker-end="url(#m-req)"/>
+<path d="M204 771 L214 771" class="req" marker-end="url(#m-req)"/>
+<path d="M204 819 L214 819" class="req" marker-end="url(#m-req)"/>
+<path d="M204 867 L214 867" class="req" marker-end="url(#m-req)"/>
+<path d="M358 686 C376 686 376 712 358 712" class="hand" marker-start="url(#m-hand)" marker-end="url(#m-hand)"/>
+<path d="M358 734 C376 734 376 760 358 760" class="hand" marker-start="url(#m-hand)" marker-end="url(#m-hand)"/>
+<path d="M358 782 C376 782 376 808 358 808" class="hand" marker-start="url(#m-hand)" marker-end="url(#m-hand)"/>
+<path d="M358 830 C376 830 376 856 358 856" class="hand" marker-start="url(#m-hand)" marker-end="url(#m-hand)"/>
+<text x="214" y="906" class="m">Command(goto) 转接 · 每轮 ≤ 1</text>
+<path d="M358 675 H396" stroke="#5eead4" stroke-width="1.6" fill="none"/>
+<rect x="396" y="648" width="534" height="232" rx="14" fill="#ffffff" stroke="#5eead4"/>
+<text x="412" y="672" class="t" style="fill:#115e59">clinic_node 预问诊子图</text>
+<text x="914" y="672" class="p" text-anchor="end">agents/clinic.py · ClinicState</text>
+<rect x="412" y="684" width="140" height="64" rx="12" fill="#fff1f2" stroke="#fda4af" filter="url(#sh)"/>
+<text x="482" y="704" class="t" fill="#be123c" text-anchor="middle">emergency_gate</text>
+<text x="482" y="722" class="b" text-anchor="middle">急症规则 · 无 LLM</text>
+<text x="482" y="739" class="b" text-anchor="middle">CRITICAL → 直接结束</text>
+<rect x="584" y="684" width="168" height="64" rx="12" fill="#f5f3ff" stroke="#c4b5fd" filter="url(#sh)"/>
+<text x="668" y="704" class="t" fill="#6d28d9" text-anchor="middle">extract_symptoms</text>
+<text x="668" y="722" class="b" text-anchor="middle">抽取症状 + 追问草稿</text>
+<text x="668" y="739" class="b" text-anchor="middle">一次结构化调用</text>
+<rect x="784" y="684" width="130" height="64" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="849" y="712.5" class="t" fill="#0f172a" text-anchor="middle">check_sufficiency</text>
+<text x="849" y="730.5" class="b" text-anchor="middle">确定性判断</text>
+<path d="M552 716 L584 716" class="req" marker-end="url(#m-req)"/>
+<path d="M752 716 L784 716" class="req" marker-end="url(#m-req)"/>
+<rect x="412" y="790" width="136" height="76" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="480" y="816" class="t" fill="#0f172a" text-anchor="middle">await_answer</text>
+<text x="480" y="834" class="b" text-anchor="middle">interrupt() 追问</text>
+<text x="480" y="851" class="b" text-anchor="middle">回答重新过闸门 ↑</text>
+<rect x="572" y="790" width="164" height="76" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="654" y="816" class="t" fill="#0f172a" text-anchor="middle">confirm_facts</text>
+<text x="654" y="834" class="b" text-anchor="middle">仅语音 · 复述确认</text>
+<text x="654" y="851" class="b" text-anchor="middle">模板，无 LLM</text>
+<rect x="770" y="790" width="144" height="76" rx="12" fill="#f5f3ff" stroke="#c4b5fd" filter="url(#sh)"/>
+<text x="842" y="816" class="t" fill="#6d28d9" text-anchor="middle">conclude</text>
+<text x="842" y="834" class="b" text-anchor="middle">ReAct + 技能 + RAG</text>
+<text x="842" y="851" class="b" text-anchor="middle">推送分诊卡片</text>
+<path d="M849 748 V768 H480" class="req"/>
+<path d="M849 768 L849 790" class="req" marker-end="url(#m-req)"/>
+<path d="M654 768 L654 790" class="req" marker-end="url(#m-req)"/>
+<path d="M480 768 L480 790" class="req" marker-end="url(#m-req)"/>
+<text x="486" y="784" class="m">缺信息</text>
+<text x="660" y="784" class="m">仅语音</text>
+<text x="855" y="784" class="m">足够</text>
+<path d="M428 790 L428 748" class="req" marker-end="url(#m-req)"/>
+<path d="M736 828 L770 828" class="req" marker-end="url(#m-req)"/>
+<text x="753" y="821" class="m" text-anchor="middle">确认</text>
+<rect x="16" y="936" width="928" height="112" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+<text x="32" y="960" class="h">共享能力</text>
+<text x="928" y="960" class="p" text-anchor="end">节点调用</text>
+<path d="M300 918 L300 972" class="thin" marker-end="url(#m-thin)"/>
+<path d="M480 918 L480 972" class="thin" marker-end="url(#m-thin)"/>
+<path d="M790 918 L790 972" class="thin" marker-end="url(#m-thin)"/>
+<rect x="32" y="972" width="296" height="66" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="46" y="993" class="t" fill="#0f172a">Agent Skills 注册表</text>
+<text x="46" y="1011" class="b">skills/*/SKILL.md + skill.py → 工具</text>
+<text x="46" y="1028" class="b">按 tag 分给节点 · load_skill</text>
+<rect x="332" y="972" width="296" height="66" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="346" y="993" class="t" fill="#0f172a">混合 RAG · rag/</text>
+<text x="346" y="1011" class="b">BM25 30% + 稠密 MMR 70% → RRF</text>
+<text x="346" y="1028" class="b">Chroma / FAISS / Qdrant / pgvector</text>
+<rect x="632" y="972" width="296" height="66" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="646" y="993" class="t" fill="#0f172a">卡片 · emit_card()</text>
+<text x="646" y="1011" class="b">工具 / 节点写入 custom 流 → SSE card</text>
+<text x="646" y="1028" class="b">main.py 不嗅探工具名</text>
+<rect x="16" y="1062" width="928" height="132" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+<text x="32" y="1086" class="h">外部服务</text>
+<rect x="32" y="1096" width="218" height="86" rx="12" fill="#f5f3ff" stroke="#c4b5fd" filter="url(#sh)"/>
+<text x="46" y="1118.5" class="t" fill="#6d28d9">对话模型</text>
+<text x="46" y="1136.5" class="m">OpenAI 兼容 · agents/llm.py</text>
+<text x="46" y="1153.5" class="b">ARK · OpenAI · DeepSeek</text>
+<text x="46" y="1170.5" class="b">Qwen · Zhipu · custom</text>
+<rect x="256" y="1096" width="218" height="86" rx="12" fill="#f5f3ff" stroke="#c4b5fd" filter="url(#sh)"/>
+<text x="270" y="1118.5" class="t" fill="#6d28d9">视觉模型</text>
+<text x="270" y="1136.5" class="b">报告 · 药盒 · 追溯码</text>
+<text x="270" y="1153.5" class="b">输出视为不可信用户材料</text>
+<text x="270" y="1170.5" class="b">← /api/vision-chat</text>
+<rect x="480" y="1096" width="218" height="86" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="494" y="1118.5" class="t" fill="#0f172a">语音服务商</text>
+<text x="494" y="1136.5" class="b">火山引擎 流式 ASR / TTS</text>
+<text x="494" y="1153.5" class="b">fake（离线测试）</text>
+<text x="494" y="1170.5" class="b">← asr.py · tts.py</text>
+<rect x="704" y="1096" width="224" height="86" rx="12" fill="#ffffff" stroke="#e2e8f0" filter="url(#sh)"/>
+<text x="718" y="1118.5" class="t" fill="#0f172a">可观测性 · 默认关闭</text>
+<text x="718" y="1136.5" class="b">OpenInference → OTLP</text>
+<text x="718" y="1153.5" class="b">→ Jaeger，或 LangSmith</text>
+<text x="718" y="1170.5" class="b">默认不记录内容与图片</text>
+<text x="16" y="1226" class="h">图例</text>
+<path d="M80 1222 L114 1222" class="req" marker-end="url(#m-req)"/>
+<text x="122" y="1226.5" class="l">请求 / 事件流</text>
+<path d="M222 1222 L256 1222" class="audio" marker-end="url(#m-audio)"/>
+<text x="264" y="1226.5" class="l">音频</text>
+<path d="M312 1222 L346 1222" class="text" marker-end="url(#m-text)"/>
+<text x="354" y="1226.5" class="l">进图（仅文本）</text>
+<path d="M467 1222 L501 1222" class="hand" marker-end="url(#m-hand)"/>
+<text x="509" y="1226.5" class="l">转接</text>
+<rect x="557" y="1214" width="22" height="16" rx="4" fill="#f5f3ff" stroke="#c4b5fd"/>
+<text x="587" y="1226.5" class="l">LLM 调用</text>
+<rect x="663" y="1214" width="22" height="16" rx="4" fill="#fffbeb" stroke="#fcd34d"/>
+<rect x="691" y="1214" width="22" height="16" rx="4" fill="#fff1f2" stroke="#fda4af"/>
+<text x="721" y="1226.5" class="l">安全闸门</text>
+</svg>

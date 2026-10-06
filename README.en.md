@@ -147,28 +147,7 @@ The full design (turn model, barge-in, read-back, emergency handling, client pro
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    UI[React mobile client] -->|POST /api/chat| API[FastAPI + SSE]
-    UI -->|POST /api/vision-chat| API
-    UI <-->|WebSocket /api/voice: audio + events| Voice[Voice gateway: ASR, turns, barge-in, TTS]
-    Voice --> Graph
-    API --> Vision[Vision-capable model]
-    Vision --> Graph[LangGraph workflow]
-    API --> Graph
-    Graph --- Checkpointer[(Checkpointer: memory / sqlite, keyed by thread_id)]
-    Graph --> Router[Router agent]
-    Router --> Agents[Advisor / Insurance / Report / Pharmacy]
-    Router --> Clinic[Clinic subgraph: emergency gate, symptom extraction, interrupt follow-ups, triage]
-    Agents <-->|Command handoffs| Clinic
-    Agents --> Skills[Agent Skills]
-    Clinic --> Skills
-    Agents --> RAG[Hybrid RAG]
-    Clinic --> RAG
-    Graph -->|text, status, tool and card events| UI
-    Graph -. OpenInference / OTLP .-> Traces[Jaeger or compatible backend]
-    Evals[Regression evals] --> Graph
-```
+<p align="center"><img src="docs/images/architecture.en.svg" alt="System architecture: text and voice are two channels into the same LangGraph; safety gates sit before the model and before speech" width="900"></p>
 
 The backend keeps recognition and reasoning separate: a vision model extracts visible facts, then the report or pharmacy agent interprets the redacted result. The frontend never receives a private chain of thought; it displays execution status and tool-call progress only.
 
